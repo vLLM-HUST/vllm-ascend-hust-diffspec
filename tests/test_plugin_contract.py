@@ -78,3 +78,54 @@ def test_failed_registration_can_be_retried(monkeypatch: pytest.MonkeyPatch) -> 
         plugin.register()
 
     assert plugin._REGISTERED is False
+
+
+@pytest.mark.parametrize(
+    ("module_name", "patch_names", "entrypoint_name"),
+    [
+        (
+            "diffspec.vllm_patch",
+            ("_patch_config", "_patch_metrics", "_patch_eagle3_model"),
+            "patch_vllm",
+        ),
+        (
+            "diffspec.ascend_patch",
+            (
+                "_patch_forward_context",
+                "_patch_rotary_cache",
+                "_patch_factory",
+                "_patch_attention",
+                "_patch_runner",
+            ),
+            "patch_vllm_ascend",
+        ),
+    ],
+)
+def test_patch_state_is_retryable_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    module_name: str,
+    patch_names: tuple[str, ...],
+    entrypoint_name: str,
+) -> None:
+    monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
+    module = __import__(module_name, fromlist=[entrypoint_name])
+    monkeypatch.setattr(module, "_PATCHED", False)
+    calls: list[str] = []
+
+    def fail_once() -> None:
+        calls.append("failed")
+        raise RuntimeError("incompatible runtime hook")
+
+    monkeypatch.setattr(module, patch_names[0], fail_once)
+    for name in patch_names[1:]:
+        monkeypatch.setattr(module, name, lambda name=name: calls.append(name))
+
+    with pytest.raises(RuntimeError, match="incompatible runtime hook"):
+        getattr(module, entrypoint_name)()
+
+    assert module._PATCHED is False
+
+    monkeypatch.setattr(module, patch_names[0], lambda: calls.append("retried"))
+    getattr(module, entrypoint_name)()
+    assert module._PATCHED is True
+    assert calls.count("retried") == 1

@@ -207,7 +207,7 @@ def patch_vllm() -> None:
     global _PATCHED
     if _PATCHED:
         return
-    _PATCHED = True
     _patch_config()
     _patch_metrics()
     _patch_eagle3_model()
+    _PATCHED = True

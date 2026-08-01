@@ -351,9 +351,9 @@ def patch_vllm_ascend() -> None:
     global _PATCHED
     if _PATCHED:
         return
-    _PATCHED = True
     _patch_forward_context()
     _patch_rotary_cache()
     _patch_factory()
     _patch_attention()
     _patch_runner()
+    _PATCHED = True
