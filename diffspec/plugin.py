@@ -13,7 +13,6 @@ def register() -> None:
     global _REGISTERED
     if _REGISTERED:
         return
-    _REGISTERED = True
 
     from diffspec.vllm_patch import patch_vllm
 
@@ -30,3 +29,4 @@ def register() -> None:
         patch_vllm_ascend()
 
     patch_after_import("vllm_ascend.worker.model_runner_v1", patch_ascend)
+    _REGISTERED = True

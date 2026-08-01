@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,13 +40,13 @@ def select_profile(results: list[dict[str, Any]]) -> dict[str, Any]:
     eligible = [result for result in results if result_is_eligible(result)]
     if not eligible:
         raise ValueError(
-            "no complete profile satisfies its benchmark thresholds with "
+            "no profile passes: no complete profile satisfies its thresholds with "
             "at least five samples and three repeats"
         )
     best = max(eligible, key=lambda item: item["geometric_mean_speedup"])
     return {
         "schema_version": 1,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "method": "diffspec",
         "model_hash": best["model_hash"],
         "hardware": best["hardware"],
@@ -74,7 +74,7 @@ def main() -> int:
         selected = select_profile(loaded)
     except ValueError as exc:
         parser.error(str(exc))
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     filename = "_".join(
         (
             safe_component(selected["model_hash"]),

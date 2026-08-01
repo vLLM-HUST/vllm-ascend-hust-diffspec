@@ -24,7 +24,7 @@ import urllib.request
 from array import array
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -427,7 +427,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     )
     result = {
         "schema_version": 1,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "method": "diffspec",
         "baseline": asdict(baseline),
         "diffspec": asdict(diffspec),
