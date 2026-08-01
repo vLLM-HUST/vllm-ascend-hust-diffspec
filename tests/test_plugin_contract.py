@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -22,6 +23,23 @@ def test_general_plugin_entry_point_is_declared() -> None:
 
     assert '[project.entry-points."vllm.general_plugins"]' in config
     assert 'diffspec = "diffspec.plugin:register"' in config
+
+
+def test_vllm_hust_optimization_manifest_matches_entry_point() -> None:
+    manifest = json.loads(
+        (REPO_ROOT / ".vllm-hust" / "optimization.json").read_text()
+    )
+
+    assert manifest["schema_version"] == 1
+    assert manifest["id"] == "diffspec"
+    assert manifest["entrypoint"] == {
+        "group": "vllm.general_plugins",
+        "name": "diffspec",
+    }
+    assert manifest["parameters"]["draft_model"]["required"] is True
+    assert manifest["activation"]["vllm_plugins"] == ["ascend", "diffspec"]
+    speculative_config = manifest["activation"]["extra_args"][1]
+    assert speculative_config["draft_context_policy"] == "diffspec"
 
 
 def test_register_installs_each_hook_once(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -122,6 +122,17 @@ and `ascend`.
 
 ## Quick Start
 
+With sibling `vllm-hust-dev-hub`, the repository manifest handles installation,
+entry-point validation, safe defaults, and argument injection:
+
+```bash
+cd ../vllm-hust-dev-hub
+./manage.sh restart --optimization diffspec \
+  --draft-model /path/to/eagle3-draft-model
+```
+
+The equivalent low-level invocation is documented below for standalone use.
+
 ```bash
 export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 
