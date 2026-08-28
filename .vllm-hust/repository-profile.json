@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "canonical_registry": "https://github.com/vLLM-HUST/vllm-hust-docs/tree/codex/ecosystem-architecture-reorganization/registry",
+  "repository": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec",
+  "repository_role": "runtime_component",
+  "relation_to_runtime": "extends_runtime_behavior",
+  "lifecycle": "incubating",
+  "artifacts": [
+    {
+      "id": "diffspec-decoding-component",
+      "artifact_type": "runtime_component",
+      "system_role": "decoding_mechanism",
+      "delivery_model": "plugin_bundle",
+      "execution_planes": ["scheduler", "worker", "device"],
+      "integration_contracts": [
+        "vllm.speculative_decoding",
+        "vllm.model_runner.v1",
+        "vllm.operator.v1"
+      ]
+    }
+  ],
+  "system_boundaries": {
+    "is": [
+      "a differential speculative-decoding mechanism",
+      "a coordinated scheduler, runner, attention, and device component"
+    ],
+    "is_not": [
+      "an Ascend platform profile",
+      "a KV store or connector",
+      "an external state system or control plane"
+    ]
+  },
+  "validation": [
+    "python -m pytest tests/ -q",
+    "ruff check .",
+    "run declared correctness and matched performance suites on supported Ascend hardware"
+  ],
+  "compatibility_document": "README.md#architecture"
+}

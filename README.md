@@ -13,6 +13,17 @@
 
 ---
 
+## Ecosystem classification
+
+DiffSpec is a speculative-decoding runtime component spanning scheduler,
+model-runner, attention, and device execution. It is not a platform profile,
+external KV system, connector, or control plane. Its current plugin packaging
+is a delivery mechanism for the decoding component and does not make the
+research method a universal plugin API.
+
+See [`.vllm-hust/repository-profile.json`](./.vllm-hust/repository-profile.json)
+for the machine-readable boundary and validation declaration.
+
 ## What DiffSpec Does
 
 In long-sequence generation, the cost of each decoding step rises with the
