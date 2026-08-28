@@ -13,10 +13,10 @@
       "delivery_model": "plugin_bundle",
       "execution_planes": ["scheduler", "worker", "device"],
       "integration_contracts": [
-        "vllm.speculative_decoding",
         "vllm.model_runner.v1",
         "vllm.operator.v1"
-      ]
+      ],
+      "integration_surfaces": ["vllm.speculative_decoding"]
     }
   ],
   "system_boundaries": {
