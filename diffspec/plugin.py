@@ -5,13 +5,26 @@
 
 from __future__ import annotations
 
+import os
+
 _REGISTERED = False
+_EXTENSION_ID = "org.vllm-hust.diffspec"
+_MANAGER_ENABLED_ENV = "VLLMHUST_EXT_ENABLED_BUNDLES"
+
+
+def _manager_allows_registration() -> bool:
+    """Honor Manager intent while preserving direct vLLM installations."""
+    raw = os.getenv(_MANAGER_ENABLED_ENV)
+    if raw is None:
+        return True
+    enabled = {item.strip() for item in raw.split(",") if item.strip()}
+    return _EXTENSION_ID in enabled
 
 
 def register() -> None:
     """Install idempotent runtime hooks in every vLLM process."""
     global _REGISTERED
-    if _REGISTERED:
+    if _REGISTERED or not _manager_allows_registration():
         return
     _REGISTERED = True
 
