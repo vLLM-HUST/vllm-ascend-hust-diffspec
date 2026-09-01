@@ -118,6 +118,71 @@ The plugin auto-registers through the `vllm.general_plugins` entry point. If
 your deployment filters plugins with `VLLM_PLUGINS`, include both `diffspec`
 and `ascend`.
 
+### Install and manage with vLLM-HUST Extension Manager
+
+DiffSpec also publishes a static `0.2-experimental` extension manifest. The
+Manager discovers this metadata without importing PyTorch, vLLM, vLLM Ascend,
+or any device code:
+
+```bash
+python -m pip install vllm-hust-ext vllm-diffspec
+vllm-hust-ext extension validate org.vllm-hust.diffspec
+```
+
+Create `diffspec.json` with the complete vLLM speculative configuration. The
+model paths remain deployment configuration and are intentionally not embedded
+in the package manifest:
+
+```json
+{
+  "launch_options": {
+    "speculative_config": {
+      "method": "eagle3",
+      "model": "/path/to/eagle3-draft-model",
+      "num_speculative_tokens": 5,
+      "enforce_eager": true,
+      "draft_context_policy": "diffspec",
+      "diffspec_verification_mode": "auto",
+      "diffspec_chunk_size": 64,
+      "diffspec_token_budget": 2048,
+      "diffspec_retrieval_interval": 4,
+      "diffspec_max_tree_nodes": 50,
+      "diffspec_tree_threshold": 0.75,
+      "diffspec_adaptive_profile": true,
+      "diffspec_long_context_threshold": 49152,
+      "diffspec_long_context_depth": 2
+    }
+  }
+}
+```
+
+Then validate compatibility, enable the extension, inspect the generated
+command, and launch vLLM:
+
+```bash
+vllm-hust-ext extension configure org.vllm-hust.diffspec --file diffspec.json
+vllm-hust-ext extension check org.vllm-hust.diffspec
+vllm-hust-ext extension enable org.vllm-hust.diffspec
+vllm-hust-ext run --dry-run -- vllm serve /path/to/target-model
+vllm-hust-ext run -- vllm serve /path/to/target-model
+```
+
+Disabling affects the next Manager-owned vLLM process; it does not mutate an
+already running process:
+
+```bash
+vllm-hust-ext extension disable org.vllm-hust.diffspec
+vllm-hust-ext extension forget org.vllm-hust.diffspec
+python -m pip uninstall vllm-diffspec
+```
+
+The current compatibility declaration is deliberately limited to the vLLM
+Ascend `0.23.x` line used by the implementation. DiffSpec is a trusted
+in-process extension: it patches vLLM configuration, Eagle3, Ascend attention,
+runner, and sampling surfaces and requires device access. Expand the declared
+range only after the full runtime and performance matrix passes on another
+release line.
+
 ---
 
 ## Quick Start

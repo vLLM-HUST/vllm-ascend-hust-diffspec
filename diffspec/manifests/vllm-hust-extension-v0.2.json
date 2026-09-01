@@ -1,0 +1,65 @@
+{
+  "schema_version": "0.2-experimental",
+  "extension_id": "org.vllm-hust.diffspec",
+  "extension_version": "0.2.0",
+  "kind": "in_process_plugin",
+  "host": {
+    "provider": "vllm",
+    "name": "vllm-ascend",
+    "version_range": ">=0.23,<0.24"
+  },
+  "runtime": {
+    "type": "python",
+    "process_scope": "vllm_engine_and_ascend_worker",
+    "isolation": "trusted_in_process"
+  },
+  "lifecycle_owner": "vllm",
+  "protocols": [
+    {
+      "name": "vllm.general_plugins",
+      "version_range": null
+    },
+    {
+      "name": "vllm-ascend.runtime-patch-surface",
+      "version_range": null
+    }
+  ],
+  "implementation": [
+    {
+      "type": "python_entry_point",
+      "group": "vllm.general_plugins",
+      "name": "diffspec",
+      "status": "active"
+    }
+  ],
+  "requires_services": [],
+  "components": [
+    {
+      "component_id": "differential-speculative-decoder",
+      "contracts": [
+        "vllm.general_plugins"
+      ],
+      "execution_planes": [
+        "scheduler",
+        "worker",
+        "native",
+        "device"
+      ],
+      "isolation": "trusted_in_process",
+      "implementation_ref": "diffspec.plugin:register",
+      "permissions": [
+        "device_access"
+      ]
+    }
+  ],
+  "activation": {
+    "entry_points": [
+      {
+        "group": "vllm.general_plugins",
+        "name": "diffspec"
+      }
+    ],
+    "environment": {},
+    "additional_config": {}
+  }
+}
