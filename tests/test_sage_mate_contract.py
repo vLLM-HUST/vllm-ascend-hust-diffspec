@@ -6,7 +6,9 @@ import torch
 from diffspec.runtime import find_target_rotary_cache, validate_diffspec_runtime
 
 
-def _sage_mate_config(*, draft_vocab: int = 248320, tp: int = 4):
+def _sage_mate_config(
+    *, draft_vocab: int = 248320, tp: int = 4, uses_mrope: bool = True
+):
     draft = SimpleNamespace(
         hf_config=SimpleNamespace(num_hidden_layers=1),
         dtype=torch.bfloat16,
@@ -22,7 +24,7 @@ def _sage_mate_config(*, draft_vocab: int = 248320, tp: int = 4):
     )
     target = SimpleNamespace(
         enforce_eager=False,
-        uses_mrope=False,
+        uses_mrope=uses_mrope,
         use_mla=False,
         quantization=None,
         dtype=torch.bfloat16,
@@ -42,7 +44,10 @@ def _sage_mate_config(*, draft_vocab: int = 248320, tp: int = 4):
 
 
 def test_sage_mate_contract_requires_tp4_graph_and_matching_draft_vocab():
+    # Qwen3.5/Qwen3.8 exposes M-RoPE in the target config.  Text-only Eagle3
+    # drafting must not be rejected solely because that capability is present.
     validate_diffspec_runtime(_sage_mate_config())
+    validate_diffspec_runtime(_sage_mate_config(uses_mrope=False))
 
     with pytest.raises(ValueError, match="tensor parallel size 4"):
         validate_diffspec_runtime(_sage_mate_config(tp=1))

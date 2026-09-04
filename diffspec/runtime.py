@@ -202,8 +202,12 @@ def validate_diffspec_runtime(vllm_config: Any) -> None:
         )
     if vllm_config.cache_config.enable_prefix_caching:
         raise ValueError("Ascend DiffSpec currently requires prefix caching off")
-    if vllm_config.model_config.uses_mrope:
-        raise ValueError("Ascend DiffSpec does not yet support M-RoPE")
+    # Qwen3.5/Qwen3.8 advertises M-RoPE even for text-only requests.  The
+    # target runner owns those positions; Eagle3 consumes target hidden states
+    # and keeps its own rotary table for the draft layer.  Rejecting the model
+    # here therefore excluded the exact dense Qwen3.8 lane this integration is
+    # designed for.  Multimodal request coverage remains a separate capability
+    # (the Sage Mate qualification lane is text-only).
     if vllm_config.model_config.use_mla:
         raise ValueError("Ascend DiffSpec does not support MLA models")
     if vllm_config.model_config.quantization is not None:
