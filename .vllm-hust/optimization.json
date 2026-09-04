@@ -22,5 +22,17 @@
       {"method": "eagle3", "model": "${draft_model}", "num_speculative_tokens": 5, "enforce_eager": false, "draft_context_policy": "diffspec", "diffspec_verification_mode": "auto", "diffspec_chunk_size": 64, "diffspec_token_budget": 2048}
     ]
   },
-  "compatibility": {"incompatible_with": ["latchmoe"]}
+  "compatibility": {
+    "incompatible_with": ["latchmoe"],
+    "model_qualifications": [
+      {
+        "model": "Qwen3.8-27B",
+        "tensor_parallel_size": 4,
+        "execution_mode": "graph",
+        "status": "blocked",
+        "reason": "no architecture-, vocabulary- and tokenizer-compatible Eagle3 draft checkpoint",
+        "evidence": "docs/evidence/sage-mate-20260904-checkpoint-gate.md"
+      }
+    ]
+  }
 }

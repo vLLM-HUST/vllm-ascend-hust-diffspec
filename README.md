@@ -209,15 +209,16 @@ export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 
 vllm serve /path/to/target-model \
   --dtype bfloat16 \
-  --max-num-seqs 1 \
-  --enforce-eager \
+  --tensor-parallel-size 4 \
+  --max-num-seqs 8 \
   --no-enable-prefix-caching \
   --no-async-scheduling \
+  --compilation-config '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[1,2,4,8]}' \
   --speculative-config '{
     "method": "eagle3",
     "model": "/path/to/eagle3-draft-model",
     "num_speculative_tokens": 5,
-    "enforce_eager": true,
+    "enforce_eager": false,
     "draft_context_policy": "diffspec",
     "diffspec_verification_mode": "auto",
     "diffspec_chunk_size": 64,
@@ -230,6 +231,10 @@ vllm serve /path/to/target-model \
     "diffspec_long_context_depth": 2
   }'
 ```
+
+This command is an admission template, not a claim that the currently missing
+Qwen3.8-compatible Eagle3 checkpoint exists. It must fail closed at the model
+gate until that checkpoint is supplied and the full TP4 graph matrix passes.
 
 ## Configuration
 

@@ -67,7 +67,10 @@
         "execution_mode": "graph",
         "model": "Qwen3.8-27B",
         "plugin_commit": "4e57439e58ed3d78e675f9fd7b4614fb183c5394",
-        "tensor_parallel_size": 4
+        "tensor_parallel_size": 4,
+        "status": "blocked",
+        "reason": "no architecture-, vocabulary- and tokenizer-compatible Eagle3 draft checkpoint",
+        "evidence": "docs/evidence/sage-mate-20260904-checkpoint-gate.md"
       }
     }
   }

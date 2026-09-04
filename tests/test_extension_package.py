@@ -72,6 +72,16 @@ def test_optimization_profile_requires_tp4_graph_eagle3() -> None:
     assert "VLLM_ENGINE_ENFORCE_EAGER" not in profile["activation"]["environment"]
 
 
+def test_documented_candidate_does_not_fall_back_to_eager() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    quick_start = readme.split("## Quick Start", 1)[1].split("## Configuration", 1)[0]
+    assert "--tensor-parallel-size 4" in quick_start
+    assert '"cudagraph_mode":"PIECEWISE"' in quick_start
+    assert '"enforce_eager": false' in quick_start
+    assert "--enforce-eager" not in quick_start
+
+
 @pytest.mark.parametrize(
     ("manager_value", "allowed"),
     [
