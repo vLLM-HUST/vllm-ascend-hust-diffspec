@@ -40,7 +40,7 @@ def select_profile(results: list[dict[str, Any]]) -> dict[str, Any]:
     eligible = [result for result in results if result_is_eligible(result)]
     if not eligible:
         raise ValueError(
-            "no complete profile satisfies its benchmark thresholds with "
+            "no profile passes the complete benchmark thresholds with "
             "at least five samples and three repeats"
         )
     best = max(eligible, key=lambda item: item["geometric_mean_speedup"])

@@ -192,12 +192,13 @@ vllm-hust-ext extension forget org.vllm-hust.diffspec
 python -m pip uninstall vllm-diffspec
 ```
 
-The current compatibility declaration is deliberately limited to the vLLM
-Ascend `0.23.x` line used by the implementation. DiffSpec is a trusted
-in-process extension: it patches vLLM configuration, Eagle3, Ascend attention,
-runner, and sampling surfaces and requires device access. Expand the declared
-range only after the full runtime and performance matrix passes on another
-release line.
+The current source-admission declaration targets vLLM-HUST
+`0.28.1rc1.dev319` and vLLM Ascend `0.25.1rc1`; changing version metadata alone
+does not establish compatibility. DiffSpec is a trusted in-process extension:
+it patches vLLM configuration, Eagle3, Ascend attention, runner, speculative
+metadata, and sampling surfaces and requires device access. The release stays
+unverified until a matching Qwen3.8 Eagle3 checkpoint passes the complete TP4
+graph runtime and performance matrix.
 
 ---
 
