@@ -259,7 +259,9 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
         kwargs["num_input_tokens"] = batch_size
         kwargs["num_tokens"] = batch_size
         kwargs["token_indices_to_sample"] = self.arange[:batch_size]
-        self.diffspec_cache.prepare_compact_prefill()
+        self.diffspec_cache.prepare_compact_prefill(
+            first_step_metadata, batch_size
+        )
 
     def _compact_tree_decode_root(self, kwargs) -> None:
         batch_size = kwargs["batch_size"]

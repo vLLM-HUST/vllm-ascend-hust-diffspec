@@ -28,6 +28,32 @@ class _IdentityRotary:
         return query, key
 
 
+def test_compact_prefill_prepares_attention_before_graph_replay():
+    cache = DiffSpecDraftCache(
+        DiffSpecSettings(2, 8, 2, 4, 3, 0.7, False),
+        max_num_reqs=1,
+        max_model_len=8,
+        num_kv_heads=1,
+        head_dim=2,
+        target_num_layers=2,
+        dtype=torch.float32,
+        device=torch.device("cpu"),
+        rotary_embedding=_IdentityRotary(),
+    )
+    cache.set_active_requests(["request"])
+    cache.raw_key[0, :3, 0] = torch.tensor(
+        [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+    )
+    cache.raw_value[0, :3, 0] = cache.raw_key[0, :3, 0]
+
+    cache.prepare_compact_prefill(SimpleNamespace(seq_lens_list=[3]), 1)
+
+    assert cache.has_pending_attention()
+    assert cache._pending_request_indices == [0]
+    assert cache._pending_local_positions == [2]
+    assert cache._working_lens == [2]
+
+
 def test_compact_tree_root_normalizes_already_compact_prefill_index():
     proposer = object.__new__(AscendDiffSpecEagleProposer)
     proposer.arange = torch.arange(4)

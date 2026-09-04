@@ -4,7 +4,12 @@ import pytest
 import torch
 
 import diffspec.ascend_patch as ascend_patch
-from diffspec.runtime import find_target_rotary_cache, validate_diffspec_runtime
+from diffspec.runtime import (
+    DiffSpecDraftCache,
+    DiffSpecSettings,
+    find_target_rotary_cache,
+    validate_diffspec_runtime,
+)
 
 
 def _sage_mate_config(
@@ -112,3 +117,31 @@ def test_pending_cache_state_identifies_draft_attention_without_forward_context(
     assert ascend_patch._use_diffspec_draft_attention(pending)
     assert not ascend_patch._use_diffspec_draft_attention(idle)
     assert not ascend_patch._use_diffspec_draft_attention(None)
+
+
+def test_compact_prefill_state_is_ready_before_compiled_graph_replay():
+    rotary = SimpleNamespace(
+        forward_native=lambda positions, query, key: (query, key)
+    )
+    cache = DiffSpecDraftCache(
+        DiffSpecSettings(2, 8, 2, 4, 3, 0.7, False),
+        max_num_reqs=1,
+        max_model_len=8,
+        num_kv_heads=1,
+        head_dim=2,
+        target_num_layers=2,
+        dtype=torch.float32,
+        device=torch.device("cpu"),
+        rotary_embedding=rotary,
+    )
+    cache.set_active_requests(["request"])
+    cache.raw_key[0, :3, 0] = torch.tensor(
+        [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+    )
+    cache.raw_value[0, :3, 0] = cache.raw_key[0, :3, 0]
+
+    cache.prepare_compact_prefill(SimpleNamespace(seq_lens_list=[3]), 1)
+
+    assert cache.has_pending_attention()
+    assert cache._pending_request_indices == [0]
+    assert cache._pending_local_positions == [2]

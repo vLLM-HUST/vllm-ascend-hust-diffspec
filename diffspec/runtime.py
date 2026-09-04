@@ -1242,8 +1242,23 @@ class DiffSpecDraftCache:
         )
         self._write_raw(request_indices, absolute_positions, key, value)
 
-    def prepare_compact_prefill(self) -> None:
-        self._compact_prefill = True
+    def prepare_compact_prefill(self, metadata: Any, num_tokens: int) -> None:
+        """Prepare draft attention before entering the compiled Eagle graph.
+
+        Python KV-sink callbacks inside ``torch.compile`` are trace-time side
+        effects and are not guaranteed to run during graph replay.  Populate
+        the pending request/position state here so the runtime attention hook
+        can consume it deterministically on every replay.
+        """
+        batch_rows = list(range(num_tokens))
+        seq_lens = list(getattr(metadata, "seq_lens_list", ()))
+        if not seq_lens:
+            raise RuntimeError("DiffSpec compact prefill requires sequence lengths")
+        request_indices = self._canonical_slots(batch_rows)
+        local_positions = self._rebuild_working_cache(batch_rows, seq_lens)
+        self._pending_request_indices = request_indices
+        self._pending_local_positions = local_positions
+        self._draft_step += 1
 
     def prepare_tree_level(
         self,
