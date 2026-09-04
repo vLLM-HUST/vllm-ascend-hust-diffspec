@@ -12,14 +12,15 @@
     "environment": {
       "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
       "VLLM_ENGINE_ENABLE_PREFIX_CACHING": "0",
-      "VLLM_ENGINE_MAX_NUM_SEQS": "8"
+      "VLLM_ENGINE_MAX_NUM_SEQS": "4",
+      "VLLM_ENGINE_COMPILATION_CONFIG": "{\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[4,8,12,16]}"
     },
     "extra_env_keys": ["VLLM_ALLOW_LONG_MAX_MODEL_LEN"],
     "extra_args": [
       "--tensor-parallel-size",
       "4",
       "--speculative-config",
-      {"method": "eagle3", "model": "${draft_model}", "num_speculative_tokens": 5, "enforce_eager": false, "draft_context_policy": "diffspec", "diffspec_verification_mode": "auto", "diffspec_chunk_size": 64, "diffspec_token_budget": 2048}
+      {"method": "eagle3", "model": "${draft_model}", "num_speculative_tokens": 3, "draft_tensor_parallel_size": 4, "enforce_eager": false, "draft_context_policy": "diffspec", "diffspec_verification_mode": "auto", "diffspec_chunk_size": 64, "diffspec_token_budget": 2048}
     ]
   },
   "compatibility": {
@@ -29,9 +30,10 @@
         "model": "Qwen3.8-27B",
         "tensor_parallel_size": 4,
         "execution_mode": "graph",
-        "status": "blocked",
-        "reason": "no architecture-, vocabulary- and tokenizer-compatible Eagle3 draft checkpoint",
-        "evidence": "docs/evidence/sage-mate-20260904-checkpoint-gate.md"
+        "status": "compatible_performance_degraded",
+        "draft_model": "VirVen/Qwen3.5-27B-EAGLE3-v2",
+        "reason": "TP4 graph functional matrix passed; measured acceptance and latency do not justify a performance recommendation",
+        "evidence": "docs/evidence/sage-mate-20260904-tp4-graph.md"
       }
     ]
   }

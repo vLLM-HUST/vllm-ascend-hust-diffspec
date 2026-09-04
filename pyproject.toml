@@ -9,7 +9,10 @@ description = "Differential speculative decoding for long-sequence generation on
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10,<3.15"
-dependencies = []
+dependencies = [
+    "vllm>=0.28.1rc1.dev319,<0.28.2",
+    "vllm-ascend>=0.25.1rc1,<0.25.2",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: Apache Software License",

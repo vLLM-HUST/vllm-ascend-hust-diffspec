@@ -17,11 +17,11 @@
   "protocols": [
     {
       "name": "vllm.general_plugins",
-      "version_range": null
+      "version_range": ">=0.28.1rc1.dev319,<0.28.2"
     },
     {
       "name": "vllm-ascend.runtime-patch-surface",
-      "version_range": null
+      "version_range": ">=0.25.1rc1,<0.25.2"
     }
   ],
   "implementation": [
@@ -68,9 +68,11 @@
         "model": "Qwen3.8-27B",
         "plugin_commit": "4e57439e58ed3d78e675f9fd7b4614fb183c5394",
         "tensor_parallel_size": 4,
-        "status": "blocked",
-        "reason": "no architecture-, vocabulary- and tokenizer-compatible Eagle3 draft checkpoint",
-        "evidence": "docs/evidence/sage-mate-20260904-checkpoint-gate.md"
+        "status": "compatible_performance_degraded",
+        "draft_model": "VirVen/Qwen3.5-27B-EAGLE3-v2",
+        "artifact_image_id": "sha256:6dec9e68eaa61d5a3297abc5006d939d5644aa203c16ef1f9af65fb54d60722b",
+        "reason": "TP4 graph functional matrix passed; measured acceptance and latency do not justify a performance recommendation",
+        "evidence": "docs/evidence/sage-mate-20260904-tp4-graph.md"
       }
     }
   }

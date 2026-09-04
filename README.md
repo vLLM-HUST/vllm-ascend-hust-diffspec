@@ -66,8 +66,21 @@ Decode TPS excludes time to first token.
 | 128K | 2K | 14.04 | 48.04 | **3.42×** |
 | 128K | 4K | 12.22 | 52.08 | **4.26×** |
 
-They do not qualify Qwen3.8-27B, TP4, graph execution, or the current host
-commits and must not be shown as current compatibility evidence.
+They are not evidence for the current Sage Mate lane. The current Qwen3.8-27B
+qualification is functional but performance degraded; see the measured result
+below rather than applying these historical speedups to it.
+
+### Sage Mate qualification (2026-09-04)
+
+Qwen3.8-27B with `VirVen/Qwen3.5-27B-EAGLE3-v2`, BF16, TP4 and
+`FULL_DECODE_ONLY` graph execution passed correctness, four-rank draft loading,
+capture/replay, concurrency, cancellation, exception recovery and 5,425-token
+context tests. Acceptance was 103/534 draft tokens (19.29%). Warm measurements
+were TTFT P50/P95 0.459/0.469 s, request latency P50/P95 0.744/3.990 s and
+output throughput P50/P95 14.00/14.24 tok/s. The target-only baseline was
+faster, so this lane is **compatible, performance degraded**, not recommended
+as an acceleration. Full provenance is in
+[`docs/evidence/sage-mate-20260904-tp4-graph.md`](docs/evidence/sage-mate-20260904-tp4-graph.md).
 
 ---
 
@@ -104,15 +117,14 @@ DiffSpec is organized into four layers:
 - Sage Mate source target: vLLM-HUST `762f85b3` and vLLM-Ascend-HUST
   `4e57439e`
 - Qwen3.8-27B dense target, BF16, TP4, PP1, graph execution
-- A one-layer Eagle3 checkpoint with the same 248320-token vocabulary and a
-  compatible Qwen3.5 target contract
+- `VirVen/Qwen3.5-27B-EAGLE3-v2`, the qualified one-layer Eagle3 checkpoint
+  with the same 248320-token vocabulary and compatible Qwen3.5 target contract
 - Prefix caching, async scheduling, quantization, MLA, and M-RoPE disabled
 
-The locally present Qwen3-1.7B and Qwen3-8B Eagle3 drafts have a 151936-token
-vocabulary and are rejected. No compatible Qwen3.8/Qwen3.5 Eagle3 draft is
-currently available in the test inventory. Source adaptation is therefore
-**unverified**: installed, configured, and enabled intent must not be presented
-as runtime effective or compatible.
+Qwen3-1.7B and Qwen3-8B Eagle3 drafts have a 151936-token vocabulary and are
+rejected. Installing the package or configuring and enabling its bundle does
+not by itself prove runtime effectiveness. That state requires the qualified
+target/draft pair, exact runtime artifact and four-rank speculative counters.
 
 
 ---
@@ -153,7 +165,8 @@ in the package manifest:
     "speculative_config": {
       "method": "eagle3",
       "model": "/path/to/eagle3-draft-model",
-      "num_speculative_tokens": 5,
+      "num_speculative_tokens": 3,
+      "draft_tensor_parallel_size": 4,
       "enforce_eager": false,
       "draft_context_policy": "diffspec",
       "diffspec_verification_mode": "auto",
@@ -192,13 +205,11 @@ vllm-hust-ext extension forget org.vllm-hust.diffspec
 python -m pip uninstall vllm-diffspec
 ```
 
-The current source-admission declaration targets vLLM-HUST
-`0.28.1rc1.dev319` and vLLM Ascend `0.25.1rc1`; changing version metadata alone
-does not establish compatibility. DiffSpec is a trusted in-process extension:
-it patches vLLM configuration, Eagle3, Ascend attention, runner, speculative
-metadata, and sampling surfaces and requires device access. The release stays
-unverified until a matching Qwen3.8 Eagle3 checkpoint passes the complete TP4
-graph runtime and performance matrix.
+The source-admission declaration targets vLLM-HUST `0.28.1rc1.dev319` and
+vLLM Ascend `0.25.1rc1`. Compatibility comes from the recorded TP4 graph
+matrix, not the dependency declaration. DiffSpec is a trusted in-process
+extension: it patches vLLM configuration, Eagle3, Ascend attention, runner,
+speculative metadata and sampling surfaces and requires device access.
 
 ---
 
@@ -210,14 +221,15 @@ export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 vllm serve /path/to/target-model \
   --dtype bfloat16 \
   --tensor-parallel-size 4 \
-  --max-num-seqs 8 \
+  --max-num-seqs 4 \
   --no-enable-prefix-caching \
   --no-async-scheduling \
-  --compilation-config '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[1,2,4,8]}' \
+  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","cudagraph_capture_sizes":[4,8,12,16]}' \
   --speculative-config '{
     "method": "eagle3",
     "model": "/path/to/eagle3-draft-model",
-    "num_speculative_tokens": 5,
+    "num_speculative_tokens": 3,
+    "draft_tensor_parallel_size": 4,
     "enforce_eager": false,
     "draft_context_policy": "diffspec",
     "diffspec_verification_mode": "auto",
@@ -232,9 +244,10 @@ vllm serve /path/to/target-model \
   }'
 ```
 
-This command is an admission template, not a claim that the currently missing
-Qwen3.8-compatible Eagle3 checkpoint exists. It must fail closed at the model
-gate until that checkpoint is supplied and the full TP4 graph matrix passes.
+This is the qualified functional lane when the draft path resolves to
+`VirVen/Qwen3.5-27B-EAGLE3-v2` with the recorded checkpoint hash. Other draft
+models must pass the architecture, vocabulary and full TP4 graph gates before
+being added to the compatible-model list.
 
 ## Configuration
 

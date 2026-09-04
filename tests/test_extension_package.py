@@ -68,7 +68,12 @@ def test_optimization_profile_requires_tp4_graph_eagle3() -> None:
     assert args[:2] == ["--tensor-parallel-size", "4"]
     speculative = args[-1]
     assert speculative["method"] == "eagle3"
+    assert speculative["num_speculative_tokens"] == 3
+    assert speculative["draft_tensor_parallel_size"] == 4
     assert speculative["enforce_eager"] is False
+    qualification = profile["compatibility"]["model_qualifications"][0]
+    assert qualification["model"] == "Qwen3.8-27B"
+    assert qualification["status"] == "compatible_performance_degraded"
     assert "VLLM_ENGINE_ENFORCE_EAGER" not in profile["activation"]["environment"]
 
 
@@ -77,7 +82,7 @@ def test_documented_candidate_does_not_fall_back_to_eager() -> None:
 
     quick_start = readme.split("## Quick Start", 1)[1].split("## Configuration", 1)[0]
     assert "--tensor-parallel-size 4" in quick_start
-    assert '"cudagraph_mode":"PIECEWISE"' in quick_start
+    assert '"cudagraph_mode":"FULL_DECODE_ONLY"' in quick_start
     assert '"enforce_eager": false' in quick_start
     assert "--enforce-eager" not in quick_start
 
