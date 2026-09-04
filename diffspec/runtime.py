@@ -1845,10 +1845,10 @@ class DiffSpecDraftCache:
                         query=query[token_index][None, :, None, :],
                         key=self.working_key[
                             request_index : request_index + 1, :, :seq_len
-                        ],
+                        ].contiguous(),
                         value=self.working_value[
                             request_index : request_index + 1, :, :seq_len
-                        ],
+                        ].contiguous(),
                         actual_seq_lengths=[1],
                         actual_seq_lengths_kv=[seq_len],
                         num_heads=query.shape[1],
