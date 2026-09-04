@@ -25,6 +25,17 @@ def _active_runtime() -> Any | None:
     return _ACTIVE_RUNTIME.get() or _ACTIVE_RUNTIME_FALLBACK
 
 
+def _use_diffspec_draft_attention(runtime: Any | None) -> bool:
+    """Identify a draft call from its short-lived prepared cache state.
+
+    Ascend graph execution does not reliably preserve the Python forward-context
+    ``is_draft_model`` flag.  Pending attention state is created by the draft
+    model's KV sink immediately before its attention call and consumed by that
+    call, so it is both graph-safe and unambiguous.
+    """
+    return runtime is not None and runtime.has_pending_attention()
+
+
 @contextlib.contextmanager
 def activate_runtime(runtime: Any):
     """Expose a draft runtime across vLLM's separate sample phase."""
@@ -136,11 +147,7 @@ def _patch_attention() -> None:
     ):
         runtime = _active_runtime()
         self.layerIndex = extract_layer_index(layer.layer_name)
-        if (
-            runtime is not None
-            and attention_module._EXTRA_CTX.is_draft_model
-            and runtime.has_pending_attention()
-        ):
+        if _use_diffspec_draft_attention(runtime):
             return runtime.forward_attention(query, key, value, self.scale, output)
 
         if self.key_cache is None and kv_cache is not None:

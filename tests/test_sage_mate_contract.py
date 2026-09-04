@@ -103,3 +103,12 @@ def test_active_runtime_survives_contextvar_loss_during_graph_execution(monkeypa
         assert ascend_patch._active_runtime() is runtime
     finally:
         ascend_patch._ACTIVE_RUNTIME_FALLBACK = None
+
+
+def test_pending_cache_state_identifies_draft_attention_without_forward_context():
+    pending = SimpleNamespace(has_pending_attention=lambda: True)
+    idle = SimpleNamespace(has_pending_attention=lambda: False)
+
+    assert ascend_patch._use_diffspec_draft_attention(pending)
+    assert not ascend_patch._use_diffspec_draft_attention(idle)
+    assert not ascend_patch._use_diffspec_draft_attention(None)
