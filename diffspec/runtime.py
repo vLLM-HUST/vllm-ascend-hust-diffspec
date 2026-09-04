@@ -107,13 +107,25 @@ class DiffSpecRuntimeMetrics:
 
 
 def find_target_rotary_cache(model: torch.nn.Module) -> torch.Tensor:
-    """Find the first full-attention RoPE table in hybrid Qwen3.5 layers."""
-    layers = getattr(getattr(model, "model", None), "layers", ())
-    for layer in layers:
-        rotary = getattr(getattr(layer, "self_attn", None), "rotary_emb", None)
-        cache = getattr(rotary, "cos_sin_cache", None)
-        if cache is not None:
-            return cache
+    """Find the first full-attention RoPE table in a Qwen3.5 wrapper stack."""
+    pending = [model]
+    visited: set[int] = set()
+    while pending:
+        module = pending.pop()
+        if id(module) in visited:
+            continue
+        visited.add(id(module))
+        for layer in getattr(module, "layers", ()):
+            rotary = getattr(
+                getattr(layer, "self_attn", None), "rotary_emb", None
+            )
+            cache = getattr(rotary, "cos_sin_cache", None)
+            if cache is not None:
+                return cache
+        for name in ("language_model", "model", "module"):
+            child = getattr(module, name, None)
+            if child is not None:
+                pending.append(child)
     raise ValueError("DiffSpec target has no full-attention rotary cache")
 
 

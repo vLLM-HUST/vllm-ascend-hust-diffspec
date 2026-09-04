@@ -71,3 +71,22 @@ def test_hybrid_target_rotary_cache_skips_gdn_layers():
     )
 
     assert find_target_rotary_cache(model) is cache
+
+
+def test_hybrid_target_rotary_cache_traverses_multimodal_wrapper():
+    cache = torch.empty(8, 16)
+    model = SimpleNamespace(
+        language_model=SimpleNamespace(
+            model=SimpleNamespace(
+                layers=[
+                    SimpleNamespace(
+                        self_attn=SimpleNamespace(
+                            rotary_emb=SimpleNamespace(cos_sin_cache=cache)
+                        )
+                    )
+                ]
+            )
+        )
+    )
+
+    assert find_target_rotary_cache(model) is cache
