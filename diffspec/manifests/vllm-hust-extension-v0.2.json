@@ -1,12 +1,12 @@
 {
   "schema_version": "0.2-experimental",
   "extension_id": "org.vllm-hust.diffspec",
-  "extension_version": "0.2.0",
+  "extension_version": "0.3.0",
   "kind": "in_process_plugin",
   "host": {
     "provider": "vllm",
     "name": "vllm-ascend",
-    "version_range": ">=0.23,<0.24"
+    "version_range": ">=0.25.1rc1,<0.25.2"
   },
   "runtime": {
     "type": "python",
@@ -60,6 +60,15 @@
       }
     ],
     "environment": {},
-    "additional_config": {}
+    "additional_config": {
+      "_manager_runtime_qualification": {
+        "accelerator": "ascend",
+        "core_commit": "762f85b311fbab0bcf8921dd216f5093cd58b9b8",
+        "execution_mode": "graph",
+        "model": "Qwen3.8-27B",
+        "plugin_commit": "4e57439e58ed3d78e675f9fd7b4614fb183c5394",
+        "tensor_parallel_size": 4
+      }
+    }
   }
 }

@@ -314,11 +314,16 @@ def _patch_runner() -> None:
         return SamplerOutput(sampled_token_ids=output_token_ids, logprobs_tensors=None)
 
     def copy_draft_token_ids_to_cpu(self, scheduler_output, zeros_only=False):
+        if torch.is_tensor(self._draft_token_ids):
+            self.prev_num_spec_tokens = self._draft_token_ids.shape[1]
         if not self.num_spec_tokens:
             return
+        from vllm.distributed.parallel_state import get_pp_group
+
         if self.use_async_scheduling and not (
             scheduler_output.has_structured_output_requests
             or self.input_batch.sampling_metadata.output_token_ids
+            or get_pp_group().world_size > 1
         ):
             return
         self._draft_token_req_ids = self.input_batch.req_ids.copy()

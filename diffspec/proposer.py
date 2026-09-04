@@ -9,6 +9,7 @@ from vllm.logger import init_logger
 from diffspec.runtime import (
     DiffSpecDraftCache,
     DiffSpecSettings,
+    find_target_rotary_cache,
     select_tree_level,
     validate_diffspec_runtime,
 )
@@ -47,12 +48,7 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
         if len(draft_layers) != 1:
             raise ValueError("Ascend DiffSpec requires exactly one draft layer")
         draft_attention = draft_layers[0].self_attn
-        target_layers = self.runner.model.model.layers
-        if not target_layers:
-            raise ValueError("Ascend DiffSpec target has no local decoder layers")
-        target_cos_sin_cache = (
-            target_layers[0].self_attn.rotary_emb.cos_sin_cache
-        )
+        target_cos_sin_cache = find_target_rotary_cache(self.runner.model)
         self.diffspec_cache = DiffSpecDraftCache(
             self.diffspec_settings,
             max_num_reqs=self.runner.max_num_reqs,

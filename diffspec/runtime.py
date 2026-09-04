@@ -106,6 +106,17 @@ class DiffSpecRuntimeMetrics:
         }
 
 
+def find_target_rotary_cache(model: torch.nn.Module) -> torch.Tensor:
+    """Find the first full-attention RoPE table in hybrid Qwen3.5 layers."""
+    layers = getattr(getattr(model, "model", None), "layers", ())
+    for layer in layers:
+        rotary = getattr(getattr(layer, "self_attn", None), "rotary_emb", None)
+        cache = getattr(rotary, "cos_sin_cache", None)
+        if cache is not None:
+            return cache
+    raise ValueError("DiffSpec target has no full-attention rotary cache")
+
+
 def select_tree_level(
     logits: torch.Tensor,
     parent_indices: torch.Tensor,
@@ -160,7 +171,12 @@ def select_tree_level(
 
 
 def validate_diffspec_runtime(vllm_config: Any) -> None:
-    """Validate the deliberately narrow first Ascend implementation."""
+    """Validate the Sage Mate TP4 graph execution contract.
+
+    This is a source-admission check, not runtime qualification. In
+    particular, a matching checkpoint pair still needs multi-rank graph and
+    output evidence before a release can be marked compatible.
+    """
     spec_config = vllm_config.speculative_config
     if spec_config is None or not spec_config.use_diffspec():
         return
@@ -170,22 +186,19 @@ def validate_diffspec_runtime(vllm_config: Any) -> None:
     num_draft_layers = getattr(draft_config.hf_config, "num_hidden_layers", 0)
     if num_draft_layers != 1:
         raise ValueError("Ascend DiffSpec currently requires one draft layer")
-    if vllm_config.parallel_config.tensor_parallel_size != 1:
-        raise ValueError("Ascend DiffSpec currently requires tensor parallel size 1")
+    if vllm_config.parallel_config.tensor_parallel_size != 4:
+        raise ValueError("Sage Mate DiffSpec requires tensor parallel size 4")
     if vllm_config.parallel_config.pipeline_parallel_size != 1:
         raise ValueError("Ascend DiffSpec currently requires pipeline size 1")
-    if vllm_config.scheduler_config.max_num_seqs != 1:
-        raise ValueError(
-            "Ascend DiffSpec tree verification v1 requires --max-num-seqs 1"
-        )
+    if vllm_config.scheduler_config.max_num_seqs < 2:
+        raise ValueError("Sage Mate DiffSpec requires concurrent request capacity")
     if vllm_config.scheduler_config.async_scheduling:
         raise ValueError("Ascend DiffSpec currently requires async scheduling off")
     if spec_config.disable_padded_drafter_batch:
         raise ValueError("Ascend DiffSpec requires the padded Eagle3 drafter")
-    if not vllm_config.model_config.enforce_eager or not spec_config.enforce_eager:
+    if vllm_config.model_config.enforce_eager or spec_config.enforce_eager:
         raise ValueError(
-            "Ascend DiffSpec currently requires enforce_eager=true for both "
-            "target and draft models"
+            "Sage Mate DiffSpec requires graph mode for both target and draft models"
         )
     if vllm_config.cache_config.enable_prefix_caching:
         raise ValueError("Ascend DiffSpec currently requires prefix caching off")
@@ -199,6 +212,29 @@ def validate_diffspec_runtime(vllm_config: Any) -> None:
         raise ValueError("Ascend DiffSpec currently requires target BF16")
     if draft_config.dtype != torch.bfloat16:
         raise ValueError("Ascend DiffSpec currently requires draft BF16")
+
+    target_architectures = set(
+        getattr(vllm_config.model_config, "architectures", ()) or ()
+    )
+    if "Qwen3_5ForConditionalGeneration" not in target_architectures:
+        raise ValueError("Sage Mate DiffSpec target must be Qwen3.8/Qwen3.5 dense")
+    draft_architectures = set(getattr(draft_config, "architectures", ()) or ())
+    supported_drafts = {
+        "Eagle3LlamaForCausalLM",
+        "LlamaForCausalLMEagle3",
+    }
+    if not draft_architectures & supported_drafts:
+        raise ValueError(
+            "DiffSpec requires a one-layer Eagle3 draft checkpoint exposing "
+            "the pre-RoPE KV hook"
+        )
+    target_vocab = vllm_config.model_config.get_vocab_size()
+    draft_vocab = draft_config.get_vocab_size()
+    if target_vocab != draft_vocab:
+        raise ValueError(
+            "Eagle3 draft vocabulary does not match the target: "
+            f"target={target_vocab}, draft={draft_vocab}"
+        )
 
 
 def chunk_attention_scores(

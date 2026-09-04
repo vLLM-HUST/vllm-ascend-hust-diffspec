@@ -49,7 +49,8 @@ semantics intact.
 
 ## Key Results
 
-The following engineering measurements use Llama-3.1-8B, a one-layer Eagle3
+The following **historical, non-Sage-Mate** engineering measurements use
+Llama-3.1-8B, a one-layer Eagle3
 draft model, BF16, TP1, batch size 1, greedy decoding, and an Ascend 910B2.
 Decode TPS excludes time to first token.
 
@@ -64,6 +65,9 @@ Decode TPS excludes time to first token.
 | 128K | 1K | 13.75 | 42.50 | **3.09×** |
 | 128K | 2K | 14.04 | 48.04 | **3.42×** |
 | 128K | 4K | 12.22 | 52.08 | **4.26×** |
+
+They do not qualify Qwen3.8-27B, TP4, graph execution, or the current host
+commits and must not be shown as current compatibility evidence.
 
 ---
 
@@ -97,8 +101,18 @@ DiffSpec is organized into four layers:
 - vLLM and vLLM Ascend
 - Ascend 910B-series NPU with a working CANN/PyTorch NPU environment
 - A target model and a compatible one-layer Eagle3 draft model
-- BF16, TP1, PP1, eager execution, and batch size 1
+- Sage Mate source target: vLLM-HUST `762f85b3` and vLLM-Ascend-HUST
+  `4e57439e`
+- Qwen3.8-27B dense target, BF16, TP4, PP1, graph execution
+- A one-layer Eagle3 checkpoint with the same 248320-token vocabulary and a
+  compatible Qwen3.5 target contract
 - Prefix caching, async scheduling, quantization, MLA, and M-RoPE disabled
+
+The locally present Qwen3-1.7B and Qwen3-8B Eagle3 drafts have a 151936-token
+vocabulary and are rejected. No compatible Qwen3.8/Qwen3.5 Eagle3 draft is
+currently available in the test inventory. Source adaptation is therefore
+**unverified**: installed, configured, and enabled intent must not be presented
+as runtime effective or compatible.
 
 
 ---
@@ -140,7 +154,7 @@ in the package manifest:
       "method": "eagle3",
       "model": "/path/to/eagle3-draft-model",
       "num_speculative_tokens": 5,
-      "enforce_eager": true,
+      "enforce_eager": false,
       "draft_context_policy": "diffspec",
       "diffspec_verification_mode": "auto",
       "diffspec_chunk_size": 64,
@@ -163,8 +177,10 @@ command, and launch vLLM:
 vllm-hust-ext extension configure org.vllm-hust.diffspec --file diffspec.json
 vllm-hust-ext extension check org.vllm-hust.diffspec
 vllm-hust-ext extension enable org.vllm-hust.diffspec
-vllm-hust-ext run --dry-run -- vllm serve /path/to/target-model
-vllm-hust-ext run -- vllm serve /path/to/target-model
+vllm-hust-ext run --dry-run -- vllm serve /path/to/target-model \
+  --tensor-parallel-size 4
+vllm-hust-ext run -- vllm serve /path/to/target-model \
+  --tensor-parallel-size 4
 ```
 
 Disabling affects the next Manager-owned vLLM process; it does not mutate an

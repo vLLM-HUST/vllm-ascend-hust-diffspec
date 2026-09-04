@@ -32,7 +32,7 @@ def test_experimental_manifest_describes_real_runtime_boundaries() -> None:
     assert manifest["host"] == {
         "provider": "vllm",
         "name": "vllm-ascend",
-        "version_range": ">=0.23,<0.24",
+        "version_range": ">=0.25.1rc1,<0.25.2",
     }
     assert manifest["runtime"]["isolation"] == "trusted_in_process"
     assert manifest["lifecycle_owner"] == "vllm"
@@ -54,6 +54,22 @@ def test_experimental_manifest_describes_real_runtime_boundaries() -> None:
         "device",
     ]
     assert component["permissions"] == ["device_access"]
+
+
+def test_optimization_profile_requires_tp4_graph_eagle3() -> None:
+    profile = json.loads(
+        (REPO_ROOT / ".vllm-hust" / "optimization.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert profile["parameters"]["draft_model"]["required"] is True
+    args = profile["activation"]["extra_args"]
+    assert args[:2] == ["--tensor-parallel-size", "4"]
+    speculative = args[-1]
+    assert speculative["method"] == "eagle3"
+    assert speculative["enforce_eager"] is False
+    assert "VLLM_ENGINE_ENFORCE_EAGER" not in profile["activation"]["environment"]
 
 
 @pytest.mark.parametrize(
