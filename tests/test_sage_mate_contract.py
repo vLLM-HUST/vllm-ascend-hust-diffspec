@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+import diffspec.ascend_patch as ascend_patch
 from diffspec.runtime import find_target_rotary_cache, validate_diffspec_runtime
 
 
@@ -90,3 +91,15 @@ def test_hybrid_target_rotary_cache_traverses_multimodal_wrapper():
     )
 
     assert find_target_rotary_cache(model) is cache
+
+
+def test_active_runtime_survives_contextvar_loss_during_graph_execution(monkeypatch):
+    runtime = object()
+    ascend_patch._ACTIVE_RUNTIME_FALLBACK = runtime
+    try:
+        monkeypatch.setattr(
+            ascend_patch, "_ACTIVE_RUNTIME", SimpleNamespace(get=lambda: None)
+        )
+        assert ascend_patch._active_runtime() is runtime
+    finally:
+        ascend_patch._ACTIVE_RUNTIME_FALLBACK = None

@@ -17,15 +17,25 @@ _PATCHED = False
 _ACTIVE_RUNTIME: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
     "diffspec_active_runtime", default=None
 )
+_ACTIVE_RUNTIME_FALLBACK: Any | None = None
+
+
+def _active_runtime() -> Any | None:
+    """Return the runtime even when graph execution drops ContextVar state."""
+    return _ACTIVE_RUNTIME.get() or _ACTIVE_RUNTIME_FALLBACK
 
 
 @contextlib.contextmanager
 def activate_runtime(runtime: Any):
     """Expose a draft runtime across vLLM's separate sample phase."""
+    global _ACTIVE_RUNTIME_FALLBACK
     token = _ACTIVE_RUNTIME.set(runtime)
+    previous = _ACTIVE_RUNTIME_FALLBACK
+    _ACTIVE_RUNTIME_FALLBACK = runtime
     try:
         yield
     finally:
+        _ACTIVE_RUNTIME_FALLBACK = previous
         _ACTIVE_RUNTIME.reset(token)
 
 
@@ -40,7 +50,7 @@ def _patch_forward_context() -> None:
 
     @contextlib.contextmanager
     def set_ascend_forward_context(*args, diffspec_runtime=None, **kwargs):
-        runtime = diffspec_runtime or _ACTIVE_RUNTIME.get()
+        runtime = diffspec_runtime or _active_runtime()
         with original(*args, **kwargs):
             from vllm.forward_context import get_forward_context
 
@@ -124,7 +134,7 @@ def _patch_attention() -> None:
         output_scale=None,
         output_block_scale=None,
     ):
-        runtime = _ACTIVE_RUNTIME.get()
+        runtime = _active_runtime()
         self.layerIndex = extract_layer_index(layer.layer_name)
         if (
             runtime is not None
@@ -174,7 +184,7 @@ def _patch_attention() -> None:
     def forward_fused_infer_attention(
         self, query, key, value, attn_metadata, output, kv_cache=None
     ):
-        runtime = _ACTIVE_RUNTIME.get()
+        runtime = _active_runtime()
         capture = (
             runtime is not None
             and not attention_module._EXTRA_CTX.is_draft_model
@@ -271,8 +281,11 @@ def _patch_runner() -> None:
         return result
 
     def execute_model(self, *args, **kwargs):
+        global _ACTIVE_RUNTIME_FALLBACK
         runtime = _runtime_from_runner(self)
         token = _ACTIVE_RUNTIME.set(runtime)
+        previous = _ACTIVE_RUNTIME_FALLBACK
+        _ACTIVE_RUNTIME_FALLBACK = runtime
         try:
             if runtime is not None:
                 import vllm_ascend.ops.rotary_embedding as rotary
@@ -281,6 +294,7 @@ def _patch_runner() -> None:
                 runtime.begin_target_forward(self.input_batch.req_ids)
             return original_execute(self, *args, **kwargs)
         finally:
+            _ACTIVE_RUNTIME_FALLBACK = previous
             _ACTIVE_RUNTIME.reset(token)
 
     def sample(self, logits, spec_decode_metadata):
