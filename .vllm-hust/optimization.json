@@ -30,7 +30,14 @@
         "model": "Qwen3.8-27B",
         "tensor_parallel_size": 4,
         "execution_mode": "graph",
-        "status": "compatible_performance_degraded",
+        "status": "compatible",
+        "functional_compatibility": "passed",
+        "effectiveness_qualification": {
+          "status": "not-beneficial-in-tested-cell",
+          "scope": "qualified Eagle3 configuration / acceptance=19.29% / target-only matched comparison",
+          "reason": "Functional TP4 graph gates passed, but measured throughput was lower than target-only in this exact cell"
+        },
+        "runtime_state_source": "live_instance_observation_only",
         "draft_model": "VirVen/Qwen3.5-27B-EAGLE3-v2",
         "reason": "TP4 graph functional matrix passed; measured acceptance and latency do not justify a performance recommendation",
         "evidence": "docs/evidence/sage-mate-20260904-tp4-graph.md"

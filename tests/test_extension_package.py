@@ -73,7 +73,10 @@ def test_optimization_profile_requires_tp4_graph_eagle3() -> None:
     assert speculative["enforce_eager"] is False
     qualification = profile["compatibility"]["model_qualifications"][0]
     assert qualification["model"] == "Qwen3.8-27B"
-    assert qualification["status"] == "compatible_performance_degraded"
+    assert qualification["status"] == "compatible"
+    assert qualification["functional_compatibility"] == "passed"
+    assert qualification["effectiveness_qualification"]["status"] == "not-beneficial-in-tested-cell"
+    assert qualification["runtime_state_source"] == "live_instance_observation_only"
     assert "VLLM_ENGINE_ENFORCE_EAGER" not in profile["activation"]["environment"]
 
 
