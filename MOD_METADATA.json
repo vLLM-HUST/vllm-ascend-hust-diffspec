@@ -1,0 +1,43 @@
+{
+  "canonical_repository": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec",
+  "display_name": "DiffSpec",
+  "evidence": {
+    "index": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#key-results",
+    "latest_result": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#key-results",
+    "performance_claims": [],
+    "qualification": "not-beneficial-in-tested-cell"
+  },
+  "lifecycle": {
+    "activation_contract": "See the extension manifest and README; discovery alone does not enable this MOD.",
+    "default_enabled": false,
+    "rollback_contract": "Disable the MOD and return to the unmodified host path.",
+    "status": "experimental"
+  },
+  "metadata_source": {
+    "commit": "7df1647048ac5f05fcc502ce4bea94f26d0f5362",
+    "repository": "vLLM-HUST/vllm-hust-website"
+  },
+  "mod_id": "diffspec",
+  "repository": "vllm-ascend-hust-diffspec",
+  "responsibility": {
+    "advisor_status": "unknown",
+    "advisors": [],
+    "maintainers": [
+      {
+        "github": "dzcixy",
+        "name": "dzcixy"
+      }
+    ],
+    "organization": "vLLM-HUST"
+  },
+  "schema_version": "vllm-hust-mod-metadata-v1",
+  "scope": {
+    "mechanism": "decoding_mechanism",
+    "out_of_scope": [],
+    "supported_workloads": [
+      "Qwen3.8-27B — verified functional, performance degraded",
+      "VirVen/Qwen3.5-27B-EAGLE3-v2 — required draft",
+      "Llama-3.1-8B — historical batch-1 lane only"
+    ]
+  }
+}
