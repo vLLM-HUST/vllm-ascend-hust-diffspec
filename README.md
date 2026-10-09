@@ -146,7 +146,7 @@ and `ascend`.
 
 ### Install and manage with vLLM-HUST Extension Manager
 
-DiffSpec also publishes a static `0.2-experimental` extension manifest. The
+DiffSpec also publishes a static `0.3-experimental` extension manifest. The
 Manager discovers this metadata without importing PyTorch, vLLM, vLLM Ascend,
 or any device code:
 

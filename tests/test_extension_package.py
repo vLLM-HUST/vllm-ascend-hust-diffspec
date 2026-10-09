@@ -10,7 +10,7 @@ import pytest
 from diffspec import plugin
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = REPO_ROOT / "diffspec" / "manifests" / "vllm-hust-extension-v0.2.json"
+MANIFEST_PATH = REPO_ROOT / "diffspec" / "manifests" / "vllm-hust-extension-v0.3.json"
 
 
 def test_distribution_registers_runtime_and_manager_entry_points() -> None:
@@ -26,17 +26,19 @@ def test_distribution_registers_runtime_and_manager_entry_points() -> None:
 def test_experimental_manifest_describes_real_runtime_boundaries() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
-    assert manifest["schema_version"] == "0.2-experimental"
+    assert manifest["schema_version"] == "0.3-experimental"
     assert manifest["extension_id"] == "org.vllm-hust.diffspec"
     assert manifest["kind"] == "in_process_plugin"
     assert manifest["host"] == {
         "provider": "vllm",
         "name": "vllm-ascend",
         "version_range": ">=0.25.1rc1,<0.25.2",
+        "api_range": ">=1,<2",
     }
     assert manifest["runtime"]["isolation"] == "trusted_in_process"
     assert manifest["lifecycle_owner"] == "vllm"
     assert manifest["requires_services"] == []
+    assert manifest["resource_claims"]
     assert manifest["implementation"] == [
         {
             "type": "python_entry_point",
