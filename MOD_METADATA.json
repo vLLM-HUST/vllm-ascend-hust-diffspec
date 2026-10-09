@@ -4,7 +4,13 @@
   "evidence": {
     "index": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#key-results",
     "latest_result": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#key-results",
-    "performance_claims": [],
+    "performance_claims": [
+      {
+        "label": "matched-real-online-negative",
+        "scope": "Qwen3.8-27B with VirVen/Qwen3.5-27B-EAGLE3-v2, Ascend TP4 graph",
+        "result": "The run accepted 103/534 draft tokens (19.29%); warm TTFT was 0.459/0.469 s P50/P95 and output throughput 14.00/14.24 tok/s P50/P95, slower than target-only."
+      }
+    ],
     "qualification": "not-beneficial-in-tested-cell"
   },
   "lifecycle": {
@@ -20,7 +26,7 @@
   "mod_id": "diffspec",
   "repository": "vllm-ascend-hust-diffspec",
   "responsibility": {
-    "advisor_status": "unknown",
+    "advisor_status": "not_declared",
     "advisors": [],
     "maintainers": [
       {
