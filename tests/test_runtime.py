@@ -72,8 +72,9 @@ def test_tp_retrieval_selects_same_context_from_all_target_heads(monkeypatch, ra
 @pytest.mark.parametrize("counts", [[1, 2], [4, 4], [0, 2], [0, 0]])
 @pytest.mark.parametrize("num_prefills", [0, 1])
 @pytest.mark.parametrize("adaptive", [False, True])
+@pytest.mark.parametrize("graph_padding", [False, True])
 def test_linear_proposer_retrieves_only_committed_queries(
-    monkeypatch, counts, num_prefills, adaptive,
+    monkeypatch, counts, num_prefills, adaptive, graph_padding,
 ):
     """Linear proposals have no tree IDs, including during decode verification."""
     from vllm_ascend.spec_decode.eagle_proposer import AscendEagleProposer
@@ -92,12 +93,16 @@ def test_linear_proposer_retrieves_only_committed_queries(
         AscendEagleProposer, "prepare_next_token_ids_padded",
         lambda *args, **kwargs: result,
     )
-    query = torch.arange(32, dtype=torch.float32).view(8, 2, 2)
-    lse = torch.arange(16, dtype=torch.float32).view(8, 2)
+    query = torch.arange(36 if graph_padding else 32, dtype=torch.float32).view(-1, 2, 2)
+    lse = torch.arange(18 if graph_padding else 16, dtype=torch.float32).view(-1, 2)
     key_cache = torch.zeros((4, 8, 1, 2))
     metadata = SimpleNamespace(
-        actual_seq_lengths_q=[4, 8], seq_lens_list=[10, 12],
-        block_tables=torch.tensor([[0, 1], [2, 3]], dtype=torch.int32),
+        actual_seq_lengths_q=[4, 8, 9] if graph_padding else [4, 8],
+        seq_lens_list=[10, 12, 1] if graph_padding else [10, 12],
+        block_tables=torch.tensor(
+            [[0, 1], [2, 3], [0, 0]] if graph_padding else [[0, 1], [2, 3]],
+            dtype=torch.int32,
+        ),
         num_prefills=num_prefills,
     )
     calls = []

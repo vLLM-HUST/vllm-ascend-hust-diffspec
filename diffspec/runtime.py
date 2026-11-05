@@ -1208,12 +1208,23 @@ class DiffSpecDraftCache:
             self.metrics.retrieval_skipped_interval += 1
             return
 
-        query_ends = self._target_query_ends
+        # FIA may append a dummy graph-padding request to attention metadata.
+        # Native verification only returns counts for real scheduler requests.
+        # Exclude the dummy before building query offsets or reading KV rows.
+        batch_size = len(self._active_slots)
+        if (
+            valid_sampled_token_count.numel() < batch_size
+            or len(self._target_query_ends) < batch_size
+            or len(self._target_seq_lens) < batch_size
+            or self._target_block_tables.shape[0] < batch_size
+        ):
+            self.metrics.retrieval_skipped_no_snapshot += 1
+            return
+        query_ends = self._target_query_ends[:batch_size]
         query_starts = [0, *query_ends[:-1]]
         query_lens = [
             end - start for start, end in zip(query_starts, query_ends)
         ]
-        batch_size = len(query_lens)
         counts = valid_sampled_token_count[:batch_size].reshape(-1).long()
         starts = torch.tensor(
             query_starts,
