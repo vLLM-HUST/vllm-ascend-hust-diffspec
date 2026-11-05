@@ -12,7 +12,7 @@ import torch
 from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 
-logger = init_logger(__name__)
+logger = init_logger(f"vllm.{__name__}")
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,11 @@ class DiffSpecTreeLevel:
 class DiffSpecRuntimeMetrics:
     retrieval_count: int = 0
     retrieval_seconds: float = 0.0
+    retrieval_attempts: int = 0
+    retrieval_skipped_prefill: int = 0
+    retrieval_skipped_no_snapshot: int = 0
+    retrieval_skipped_interval: int = 0
+    retrieval_skipped_no_committed_tokens: int = 0
     tree_cycles: int = 0
     tree_nodes: int = 0
     accepted_depth: int = 0
@@ -95,6 +100,11 @@ class DiffSpecRuntimeMetrics:
         retrieval_count = max(self.retrieval_count, 1)
         return {
             "retrieval_count": self.retrieval_count,
+            "retrieval_attempts": self.retrieval_attempts,
+            "retrieval_skipped_prefill": self.retrieval_skipped_prefill,
+            "retrieval_skipped_no_snapshot": self.retrieval_skipped_no_snapshot,
+            "retrieval_skipped_interval": self.retrieval_skipped_interval,
+            "retrieval_skipped_no_committed_tokens": self.retrieval_skipped_no_committed_tokens,
             "retrieval_ms": (
                 self.retrieval_seconds / retrieval_count * 1.0e3
             ),
@@ -198,8 +208,9 @@ def validate_diffspec_runtime(vllm_config: Any) -> None:
     num_draft_layers = getattr(draft_config.hf_config, "num_hidden_layers", 0)
     if num_draft_layers != 1:
         raise ValueError("Ascend DiffSpec currently requires one draft layer")
-    if vllm_config.parallel_config.tensor_parallel_size != 4:
-        raise ValueError("Sage Mate DiffSpec requires tensor parallel size 4")
+    tp_size = vllm_config.parallel_config.tensor_parallel_size
+    if tp_size != 4:
+        raise ValueError("DiffSpec requires tensor parallel size 4")
     if vllm_config.parallel_config.pipeline_parallel_size != 1:
         raise ValueError("Ascend DiffSpec currently requires pipeline size 1")
     if vllm_config.scheduler_config.max_num_seqs < 2:
@@ -229,11 +240,25 @@ def validate_diffspec_runtime(vllm_config: Any) -> None:
     if draft_config.dtype != torch.bfloat16:
         raise ValueError("Ascend DiffSpec currently requires draft BF16")
 
+    from vllm.config.compilation import CUDAGraphMode
+
+    compilation = getattr(vllm_config, "compilation_config", None)
+    if getattr(compilation, "cudagraph_mode", None) != CUDAGraphMode.PIECEWISE:
+        raise ValueError(
+            "DiffSpec retrieval requires cudagraph_mode='PIECEWISE': full-graph "
+            "replay bypasses the per-cycle target attention callbacks"
+        )
+
     target_architectures = set(
         getattr(vllm_config.model_config, "architectures", ()) or ()
     )
-    if "Qwen3_5ForConditionalGeneration" not in target_architectures:
-        raise ValueError("Sage Mate DiffSpec target must be Qwen3.8/Qwen3.5 dense")
+    if "Qwen3_5MoeForConditionalGeneration" in target_architectures:
+        if vllm_config.model_config.quantization is not None:
+            raise ValueError("DiffSpec Qwen3.5 MoE currently requires unquantized BF16")
+        if getattr(spec_config, "diffspec_verification_mode", "auto") == "tree":
+            raise ValueError("DiffSpec Qwen3.5 MoE supports native linear verification only")
+    elif "Qwen3_5ForConditionalGeneration" not in target_architectures:
+        raise ValueError("DiffSpec target must be Qwen3.5 dense or MoE")
     draft_architectures = set(getattr(draft_config, "architectures", ()) or ())
     supported_drafts = {
         "Eagle3LlamaForCausalLM",
@@ -356,7 +381,13 @@ def select_context_chunks(
                 ranked,
                 ranked.new_tensor([newest_chunk]),
             )
-        ).sort().values
+        )
+        if chunk_scores.device.type == "npu" and num_chunks <= 2**24:
+            # 910B integer sort runs on AiCPU. These bounded chunk IDs are
+            # represented exactly by FP32, whose sort stays on the device.
+            selected_chunks = selected_chunks.float().sort().values.long()
+        else:
+            selected_chunks = selected_chunks.sort().values
 
     offsets = torch.arange(
         chunk_size, dtype=torch.long, device=chunk_scores.device
@@ -578,6 +609,7 @@ class DiffSpecDraftCache:
         device: torch.device,
         rotary_embedding: Any,
         target_cos_sin_cache: torch.Tensor | None = None,
+        target_tensor_parallel_size: int = 1,
     ) -> None:
         self.settings = settings
         self.max_num_reqs = max_num_reqs
@@ -585,6 +617,9 @@ class DiffSpecDraftCache:
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         self.target_last_layer = target_num_layers - 1
+        if target_tensor_parallel_size < 1:
+            raise ValueError("Target tensor parallel size must be positive")
+        self.target_tensor_parallel_size = target_tensor_parallel_size
         self.dtype = dtype
         self.device = device
         self.rotary_embedding = rotary_embedding
@@ -637,18 +672,24 @@ class DiffSpecDraftCache:
         )
         self.metrics = DiffSpecRuntimeMetrics()
         self._selected_token_indices: dict[int, torch.Tensor] = {}
+        self._host_selection_sources: dict[int, torch.Tensor] = {}
+        self._host_selected_chunks: dict[int, list[int]] = {}
         self._working_lens = [0] * max_num_reqs
         self._cycle_open = False
         self._draft_step = 0
         self._pending_request_indices: list[int] | None = None
         self._pending_local_positions: list[int] | None = None
         self._compact_prefill = False
+        self._rope_position_buffers: dict[torch.dtype, torch.Tensor] = {}
+        self._rope_position_written: dict[torch.dtype, int] = {}
+        self._committed_seq_lens: list[int] = []
         self._target_query: torch.Tensor | None = None
         self._target_lse: torch.Tensor | None = None
         self._target_key_cache: torch.Tensor | None = None
         self._target_block_tables: torch.Tensor | None = None
         self._target_query_ends: list[int] = []
         self._target_seq_lens: list[int] = []
+        self.target_is_prefill = True
         self._target_scale = 0.0
         self._retrieval_cycle = 0
         self._request_slots: dict[str, int] = {}
@@ -692,6 +733,7 @@ class DiffSpecDraftCache:
         self._cycle_started_at = time.perf_counter()
         self._cycle_open = True
         self._draft_step = 0
+        self._committed_seq_lens = []
         self._pending_request_indices = None
         self._pending_local_positions = None
         self._pending_tree_node_indices = None
@@ -717,6 +759,8 @@ class DiffSpecDraftCache:
             if request_id not in active_request_ids:
                 slot = self._request_slots.pop(request_id)
                 self._selected_token_indices.pop(slot, None)
+                self._host_selection_sources.pop(slot, None)
+                self._host_selected_chunks.pop(slot, None)
                 self._working_lens[slot] = 0
 
         used_slots = set(self._request_slots.values())
@@ -742,6 +786,7 @@ class DiffSpecDraftCache:
         self._target_block_tables = None
         self._target_query_ends = []
         self._target_seq_lens = []
+        self.target_is_prefill = True
         self._target_tree_layer_kv.clear()
         self._accepted_tree_nodes = None
         self._accepted_query_offset = None
@@ -809,7 +854,8 @@ class DiffSpecDraftCache:
         block_tables = getattr(metadata, "block_tables", None)
         if not query_ends or not seq_lens or block_tables is None:
             return
-        if not self.target_tree_active:
+        is_prefill = bool(getattr(metadata, "num_prefills", 1))
+        if not self.target_tree_active and is_prefill:
             query_indices = torch.tensor(
                 [end - 1 for end in query_ends],
                 dtype=torch.long,
@@ -827,6 +873,9 @@ class DiffSpecDraftCache:
         self._target_query_ends = query_ends
         self._target_seq_lens = seq_lens
         self._target_scale = scale
+        # Linear Eagle proposals have no tree IDs. Attention metadata owns
+        # the phase; keep all decode queries until native acceptance is known.
+        self.target_is_prefill = is_prefill
 
     @staticmethod
     def _reshape_target_lse(
@@ -1125,17 +1174,38 @@ class DiffSpecDraftCache:
         is_prefill: bool,
     ) -> None:
         """Retrieve context using the last committed target query per request."""
+        self.metrics.retrieval_attempts += 1
+        try:
+            self._accept_target_queries(valid_sampled_token_count, is_prefill=is_prefill)
+        finally:
+            if self.metrics.retrieval_attempts % 32 == 0:
+                logger.info("DiffSpec retrieval status: %s", self.retrieval_status())
+
+    def retrieval_status(self) -> dict[str, float | int]:
+        return dict(
+            self.metrics.snapshot(),
+            retrieval_cycle=self._retrieval_cycle,
+            selected_slots=len(self._selected_token_indices),
+            target_tensor_parallel_size=self.target_tensor_parallel_size,
+        )
+
+    def _accept_target_queries(
+        self, valid_sampled_token_count: torch.Tensor, *, is_prefill: bool,
+    ) -> None:
         if (
             self._target_query is None
             or self._target_key_cache is None
             or self._target_block_tables is None
         ):
+            self.metrics.retrieval_skipped_no_snapshot += 1
             return
         if is_prefill:
+            self.metrics.retrieval_skipped_prefill += 1
             return
         self._retrieval_cycle += 1
         interval = self.controller.retrieval_interval
         if self._retrieval_cycle % interval:
+            self.metrics.retrieval_skipped_interval += 1
             return
 
         query_ends = self._target_query_ends
@@ -1155,9 +1225,7 @@ class DiffSpecDraftCache:
             dtype=torch.long,
             device=self._target_query.device,
         )
-        if is_prefill:
-            query_offsets = lengths - 1
-        elif self.target_tree_active and self._accepted_tree_nodes is not None:
+        if self.target_tree_active and self._accepted_tree_nodes is not None:
             if self._accepted_query_offset is None:
                 raise RuntimeError("DiffSpec accepted query is unavailable")
             query_offsets = self._accepted_query_offset.to(
@@ -1166,14 +1234,32 @@ class DiffSpecDraftCache:
         else:
             query_offsets = counts.sub(1).clamp_min(0)
             query_offsets = torch.minimum(query_offsets, lengths - 1)
-        query_indices = starts + query_offsets
+        accepted_counts = counts.to("cpu").tolist()
+        committed_counts = (
+            (query_offsets + 1).to("cpu").tolist()
+            if self.target_tree_active
+            else [min(max(count, 1), length) for count, length in zip(accepted_counts, query_lens)]
+        )
+        rows = [i for i, count in enumerate(accepted_counts) if count > 0]
+        if not rows:
+            self.metrics.retrieval_skipped_no_committed_tokens += 1
+            return
+        row_indices = torch.tensor(rows, dtype=torch.long, device=self._target_query.device)
+        query_indices = (starts + query_offsets).index_select(0, row_indices)
         selected_query = self._target_query.index_select(0, query_indices)
         selected_lse = self._target_lse_by_token().index_select(
             0, query_indices
         )
 
+        # Rejected draft keys have already entered target KV. The chosen
+        # query's causal prefix must end before that rejected suffix.
+        retrieval_seq_lens = [
+            self._target_seq_lens[i] if self.target_tree_active
+            else self._target_seq_lens[i] - query_lens[i] + committed_counts[i]
+            for i in rows
+        ]
         seq_lens = torch.tensor(
-            self._target_seq_lens,
+            retrieval_seq_lens,
             dtype=torch.int32,
             device=self._target_query.device,
         )
@@ -1186,13 +1272,19 @@ class DiffSpecDraftCache:
             selected_query,
             self._target_key_cache,
             selected_lse,
-            self._target_block_tables,
+            self._target_block_tables.index_select(0, row_indices),
             seq_lens,
             chunk_size=self.settings.chunk_size,
-            max_seq_len=max(self._target_seq_lens),
+            max_seq_len=max(retrieval_seq_lens),
             scale=self._target_scale,
         )
-        for request_index, seq_len in enumerate(self._target_seq_lens):
+        if self.target_tensor_parallel_size > 1:
+            from vllm.distributed import tensor_model_parallel_all_reduce
+
+            # Pool all target heads before choosing one logical context for
+            # every draft shard and assigning compact RoPE positions.
+            scores = tensor_model_parallel_all_reduce(scores).div_(self.target_tensor_parallel_size)
+        for score_index, (request_index, seq_len) in enumerate(zip(rows, retrieval_seq_lens)):
             num_chunks = (
                 seq_len + self.settings.chunk_size - 1
             ) // self.settings.chunk_size
@@ -1200,10 +1292,10 @@ class DiffSpecDraftCache:
             previous_indices = self._selected_token_indices.get(slot)
             selection = self.set_chunk_scores(
                 slot,
-                scores[request_index, :num_chunks],
+                scores[score_index, :num_chunks],
                 seq_len,
             )
-            if request_index == 0:
+            if score_index == 0 and self.controller.adaptive:
                 previous_chunks = (
                     set()
                     if previous_indices is None
@@ -1223,7 +1315,8 @@ class DiffSpecDraftCache:
                 self.controller.observe_retrieval(
                     previous_chunks,
                     selected_chunks,
-                    float(self._last_accepted_depth),
+                    float(self._last_accepted_depth if self.target_tree_active
+                          else max(0, accepted_counts[request_index] - 1)),
                 )
         self.metrics.observe_retrieval(
             time.perf_counter() - retrieval_started_at
@@ -1242,22 +1335,28 @@ class DiffSpecDraftCache:
         )
         self._write_raw(request_indices, absolute_positions, key, value)
 
-    def prepare_compact_prefill(self, metadata: Any, num_tokens: int) -> None:
-        """Prepare draft attention before entering the compiled Eagle graph.
+    def prepare_compact_prefill(
+        self, metadata: Any, num_tokens: int,
+        *, committed_seq_lens: list[int] | None = None,
+    ) -> None:
+        """Prepare history at the committed root before the Eagle graph.
 
-        Python KV-sink callbacks inside ``torch.compile`` are trace-time side
-        effects and are not guaranteed to run during graph replay.  Populate
-        the pending request/position state here so the runtime attention hook
-        can consume it deterministically on every replay.
+        Native windowed metadata describes KV read length, not the absolute
+        committed position. Explicit boundaries also exclude rejected tokens.
         """
         batch_rows = list(range(num_tokens))
-        seq_lens = list(getattr(metadata, "seq_lens_list", ()))
+        seq_lens = (
+            committed_seq_lens if committed_seq_lens is not None
+            else list(getattr(metadata, "seq_lens_list", ()))
+        )
         if not seq_lens:
             raise RuntimeError("DiffSpec compact prefill requires sequence lengths")
+        self._committed_seq_lens = seq_lens
         request_indices = self._canonical_slots(batch_rows)
         local_positions = self._rebuild_working_cache(batch_rows, seq_lens)
         self._pending_request_indices = request_indices
         self._pending_local_positions = local_positions
+        self._compact_prefill = True
         self._draft_step += 1
 
     def prepare_tree_level(
@@ -1540,23 +1639,28 @@ class DiffSpecDraftCache:
     def _history_indices(self, request_index: int, history_end: int) -> torch.Tensor:
         selected = self._selected_token_indices.get(request_index)
         if selected is not None:
-            if selected.numel() > self.history_budget:
-                selected = selected[-self.history_budget :]
-            # Replace the previously newest chunk with a rolling tail. This
-            # keeps recent accepted tokens visible between retrievals and
-            # prevents the current draft root from appearing twice in KV.
-            reserved = min(self.settings.chunk_size, selected.numel())
-            selected_prefix = selected[:-reserved] if reserved else selected
-            tail_start = max(0, history_end - self.settings.chunk_size)
+            # Retrieval includes the committed root, but draft history ends
+            # immediately before it. Slice by absolute position, not by the
+            # last chunk's token count: a moving or partial chunk can overlap
+            # the rolling tail and shift every subsequent local RoPE position.
+            tail_start = max(0, history_end - min(
+                self.settings.chunk_size, self.history_budget,
+            ))
+            selected_prefix = selected[(selected >= 0) & (selected < tail_start)]
+            if selected.numel():
+                newest_chunk_start = selected[-1].div(
+                    self.settings.chunk_size, rounding_mode="floor",
+                ) * self.settings.chunk_size
+                selected_prefix = selected_prefix[selected_prefix < newest_chunk_start]
             rolling_tail = torch.arange(
                 tail_start,
                 history_end,
                 dtype=torch.long,
                 device=self.device,
             )
-            return torch.cat(
-                (selected_prefix.to(self.device), rolling_tail)
-            )[-self.history_budget :]
+            prefix_budget = self.history_budget - rolling_tail.numel()
+            selected_prefix = selected_prefix[-prefix_budget:] if prefix_budget else selected[:0]
+            return torch.cat((selected_prefix.to(self.device), rolling_tail))
         history_start = max(0, history_end - self.history_budget)
         return torch.arange(
             history_start,
@@ -1570,6 +1674,8 @@ class DiffSpecDraftCache:
         batch_rows: list[int],
         seq_lens: list[int],
     ) -> list[int]:
+        if self.device.type == "npu" and batch_rows:
+            return self._rebuild_working_cache_batched(batch_rows, seq_lens)
         local_positions: list[int] = []
         for batch_row in batch_rows:
             slot = self._active_slots[batch_row]
@@ -1592,6 +1698,90 @@ class DiffSpecDraftCache:
             self._working_lens[slot] = history_len
             local_positions.append(history_len)
         return local_positions
+
+    def _history_plan_host(self, slot: int, history_end: int) -> list[int]:
+        """Describe the unchanged sparse prefix and rolling tail without expansion."""
+        selected = self._selected_token_indices.get(slot)
+        if selected is None:
+            length = min(history_end, self.history_budget)
+            return [slot, length, history_end - length, 0, 0]
+        tail_length = min(history_end, self.settings.chunk_size, self.history_budget)
+        tail_start = history_end - tail_length
+        if not selected.numel():
+            return [slot, tail_length, tail_start, 0, 0]
+        if self._host_selection_sources.get(slot) is not selected:
+            starts = selected[::self.settings.chunk_size].to("cpu").tolist()
+            self._host_selected_chunks[slot] = [int(i) // self.settings.chunk_size for i in starts]
+            self._host_selection_sources[slot] = selected
+        chunks = self._host_selected_chunks[slot]
+        prefix_end = min(tail_start, chunks[-1] * self.settings.chunk_size)
+        prefix_tokens = sum(
+            max(0, min(self.settings.chunk_size, prefix_end - chunk * self.settings.chunk_size))
+            for chunk in chunks
+        )
+        prefix_length = min(prefix_tokens, self.history_budget - tail_length)
+        return [slot, prefix_length + tail_length, tail_start,
+                prefix_length, prefix_tokens - prefix_length, *chunks]
+
+    def _rebuild_working_cache_batched(
+        self, batch_rows: list[int], seq_lens: list[int],
+    ) -> list[int]:
+        from diffspec.compact_kv import rebuild_compact_kv_from_plan
+
+        slots = [self._active_slots[row] for row in batch_rows]
+        plans = [
+            self._history_plan_host(slot, max(0, seq_lens[row] - 1))
+            for slot, row in zip(slots, batch_rows)
+        ]
+        lengths = [plan[1] for plan in plans]
+        for slot, length in zip(slots, lengths):
+            self._working_lens[slot] = length
+        width = max(lengths)
+        if not width:
+            return lengths
+        plan_width = 5 + self.settings.token_budget // self.settings.chunk_size
+        plan_tensor = torch.tensor(
+            [plan + [0] * (plan_width - len(plan)) for plan in plans],
+            dtype=torch.long, device=self.device,
+        )
+        cos_sin_cache = self.rotary_embedding._match_cos_sin_cache_dtype(self.raw_key)
+        rebuild_compact_kv_from_plan(
+            self.raw_key, self.raw_value, self.working_key, self.working_value,
+            plan_tensor, cos_sin_cache, chunk_size=self.settings.chunk_size,
+            max_width=width, rotary_dim=self.rotary_embedding.rotary_dim,
+            is_neox_style=self.rotary_embedding.is_neox_style,
+        )
+        return lengths
+
+    def graph_safe_rope_positions(
+        self,
+        absolute_positions: torch.Tensor,
+        local_positions: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Return a cache-owned, stable RoPE input, including dummy captures."""
+        dtype = absolute_positions.dtype
+        buffer = self._rope_position_buffers.get(dtype)
+        if buffer is None:
+            buffer = torch.zeros(
+                self.max_num_reqs * self.max_model_len,
+                dtype=dtype,
+                device=self.device,
+            )
+            self._rope_position_buffers[dtype] = buffer
+        count = absolute_positions.numel()
+        if count > buffer.numel():
+            raise RuntimeError("DiffSpec RoPE input exceeds its persistent buffer")
+        # Only the prefix written by the preceding call can contain stale
+        # positions. The unused tail stays zero from allocation, including
+        # padded rows read by larger graph buckets.
+        previous_count = self._rope_position_written.get(dtype, 0)
+        if count < previous_count:
+            buffer[count:previous_count].zero_()
+        result = buffer[:count].view_as(absolute_positions)
+        result.copy_(absolute_positions if local_positions is None else local_positions)
+        self._rope_position_written[dtype] = count
+        return result
+
 
     def capture_raw_kv(
         self,
@@ -1620,15 +1810,25 @@ class DiffSpecDraftCache:
                 dtype=absolute_positions.dtype,
                 device=absolute_positions.device,
             )
-        if self._compact_prefill:
+        prepared_root = self._compact_prefill
+        if self._cycle_open:
+            # The proposer compacts every linear pass to one root per request.
+            # PIECEWISE may pad those tensors to its capture bucket; padding
+            # must never become a canonical request or overwrite real KV.
+            num_tokens = len(self._active_slots)
+            if key.shape[0] < num_tokens or absolute_positions.numel() < num_tokens:
+                raise RuntimeError("DiffSpec draft tensors omit active request rows")
+            key = key[:num_tokens]
+            value = value[:num_tokens]
             batch_rows = list(range(num_tokens))
-            self._compact_prefill = False
         else:
             batch_rows = self._request_indices(metadata, num_tokens)
+        if prepared_root:
+            self._compact_prefill = False
         request_indices = self._canonical_slots(batch_rows)
         self._write_raw(
             request_indices,
-            absolute_positions,
+            absolute_positions[:num_tokens],
             key,
             value,
         )
@@ -1640,7 +1840,10 @@ class DiffSpecDraftCache:
             seq_lens[0] = self._draft_logical_seq_len
         if not seq_lens:
             return None
-        if self._draft_step == 0:
+        if prepared_root:
+            assert self._pending_local_positions is not None
+            local_positions = self._pending_local_positions
+        elif self._draft_step == 0:
             local_positions = self._rebuild_working_cache(
                 batch_rows,
                 seq_lens,
@@ -1656,11 +1859,11 @@ class DiffSpecDraftCache:
         self._pending_request_indices = request_indices
         self._pending_local_positions = local_positions
         self._draft_step += 1
-        return torch.tensor(
-            local_positions,
-            dtype=absolute_positions.dtype,
-            device=absolute_positions.device,
+        result = torch.zeros_like(absolute_positions)
+        result[:num_tokens] = torch.tensor(
+            local_positions, dtype=result.dtype, device=result.device,
         )
+        return result
 
     def has_pending_attention(self) -> bool:
         return (
@@ -1821,6 +2024,9 @@ class DiffSpecDraftCache:
             return self.forward_tree_attention(
                 query, key, value, scale, output
             )
+        if query.device.type == "npu":
+            return self._forward_linear_attention_npu(query, key, value, scale, output)
+        output.zero_()
         assert self._pending_request_indices is not None
         assert self._pending_local_positions is not None
         for token_index, (request_index, local_position) in enumerate(
@@ -1837,47 +2043,81 @@ class DiffSpecDraftCache:
             ] = value[token_index]
             seq_len = local_position + 1
             self._working_lens[request_index] = seq_len
-            if query.device.type == "npu":
-                import torch_npu
+            query_heads_per_kv = query.shape[1] // self.num_kv_heads
+            expanded_key = self.working_key[
+                request_index, :, :seq_len
+            ].repeat_interleave(query_heads_per_kv, dim=0)
+            expanded_value = self.working_value[
+                request_index, :, :seq_len
+            ].repeat_interleave(query_heads_per_kv, dim=0)
+            logits = torch.einsum(
+                "hd,hsd->hs",
+                query[token_index].float(),
+                expanded_key.float(),
+            )
+            probabilities = logits.mul_(scale).softmax(dim=-1)
+            output[token_index].copy_(
+                torch.einsum(
+                    "hs,hsd->hd", probabilities, expanded_value
+                ).to(output.dtype)
+            )
+        self._pending_request_indices = None
+        self._pending_local_positions = None
+        return output
 
-                attention_output, _ = (
-                    torch_npu.npu_fused_infer_attention_score(
-                        query=query[token_index][None, :, None, :],
-                        key=self.working_key[
-                            request_index : request_index + 1, :, :seq_len
-                        ].contiguous(),
-                        value=self.working_value[
-                            request_index : request_index + 1, :, :seq_len
-                        ].contiguous(),
-                        actual_seq_lengths=[1],
-                        actual_seq_lengths_kv=[seq_len],
-                        num_heads=query.shape[1],
-                        num_key_value_heads=self.num_kv_heads,
-                        input_layout="BNSD",
-                        scale=scale,
-                        sparse_mode=0,
-                    )
-                )
-                output[token_index].copy_(attention_output[0, :, 0])
-            else:
-                query_heads_per_kv = query.shape[1] // self.num_kv_heads
-                expanded_key = self.working_key[
-                    request_index, :, :seq_len
-                ].repeat_interleave(query_heads_per_kv, dim=0)
-                expanded_value = self.working_value[
-                    request_index, :, :seq_len
-                ].repeat_interleave(query_heads_per_kv, dim=0)
-                logits = torch.einsum(
-                    "hd,hsd->hs",
-                    query[token_index].float(),
-                    expanded_key.float(),
-                )
-                probabilities = logits.mul_(scale).softmax(dim=-1)
-                output[token_index].copy_(
-                    torch.einsum(
-                        "hs,hsd->hd", probabilities, expanded_value
-                    ).to(output.dtype)
-                )
+    def _forward_linear_attention_npu(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        scale: float,
+        output: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run one batched draft attention with each request's committed length."""
+        import torch_npu
+
+        assert self._pending_request_indices is not None
+        assert self._pending_local_positions is not None
+        slots = self._pending_request_indices
+        positions = self._pending_local_positions
+        batch_size = len(slots)
+        lengths = [position + 1 for position in positions]
+        output.zero_()
+        indices = torch.tensor(
+            [(slot * self.num_kv_heads + head) * self.settings.token_budget + position
+             for slot, position in zip(slots, positions) for head in range(self.num_kv_heads)],
+            dtype=torch.long, device=self.device,
+        )
+        self.working_key.view(-1, self.head_dim).index_copy_(0, indices, key[:batch_size].reshape(-1, self.head_dim))
+        self.working_value.view(-1, self.head_dim).index_copy_(0, indices, value[:batch_size].reshape(-1, self.head_dim))
+        for row, slot in enumerate(slots):
+            self._working_lens[slot] = lengths[row]
+
+        # Canonical slots need not match scheduler order after requests leave.
+        # Preserve that order, and exclude capture padding from both Q and KV.
+        first = slots[0]
+        if slots == list(range(first, first + batch_size)):
+            keys = self.working_key[first:first + batch_size]
+            values = self.working_value[first:first + batch_size]
+        else:
+            indices = torch.tensor(slots, dtype=torch.long, device=self.device)
+            keys = self.working_key.index_select(0, indices)
+            values = self.working_value.index_select(0, indices)
+        # Actual lengths mask unused capacity. Contiguous slot views avoid
+        # copying the compact prefix on every speculative token.
+        attention, _ = torch_npu.npu_fused_infer_attention_score(
+            query=query[:batch_size].unsqueeze(2).contiguous(),
+            key=keys,
+            value=values,
+            actual_seq_lengths=[1] * batch_size,
+            actual_seq_lengths_kv=lengths,
+            num_heads=query.shape[1],
+            num_key_value_heads=self.num_kv_heads,
+            input_layout="BNSD",
+            scale=scale,
+            sparse_mode=0,
+        )
+        output[:batch_size].copy_(attention[:, :, 0])
         self._pending_request_indices = None
         self._pending_local_positions = None
         return output

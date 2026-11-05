@@ -2,8 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from vllm.config.compilation import CUDAGraphMode
 
-import diffspec.ascend_patch as ascend_patch
+from diffspec import ascend_patch
 from diffspec.runtime import (
     DiffSpecDraftCache,
     DiffSpecSettings,
@@ -46,6 +47,7 @@ def _sage_mate_config(
         scheduler_config=SimpleNamespace(max_num_seqs=8, async_scheduling=False),
         cache_config=SimpleNamespace(enable_prefix_caching=False),
         model_config=target,
+        compilation_config=SimpleNamespace(cudagraph_mode=CUDAGraphMode.PIECEWISE),
     )
 
 
@@ -54,11 +56,42 @@ def test_sage_mate_contract_requires_tp4_graph_and_matching_draft_vocab():
     # drafting must not be rejected solely because that capability is present.
     validate_diffspec_runtime(_sage_mate_config())
     validate_diffspec_runtime(_sage_mate_config(uses_mrope=False))
+    with pytest.raises(ValueError, match="tensor parallel size 4"):
+        validate_diffspec_runtime(_sage_mate_config(tp=2))
 
     with pytest.raises(ValueError, match="tensor parallel size 4"):
         validate_diffspec_runtime(_sage_mate_config(tp=1))
     with pytest.raises(ValueError, match="vocabulary does not match"):
         validate_diffspec_runtime(_sage_mate_config(draft_vocab=151936))
+
+
+
+@pytest.mark.parametrize("tp", [4])
+def test_qwen35_moe_accepts_bf16_linear_verification(tp):
+    config = _sage_mate_config(tp=tp)
+    config.model_config.architectures = ["Qwen3_5MoeForConditionalGeneration"]
+    validate_diffspec_runtime(config)
+    config.speculative_config.diffspec_verification_mode = "tree"
+    with pytest.raises(ValueError, match="linear verification only"):
+        validate_diffspec_runtime(config)
+
+
+
+
+@pytest.mark.parametrize("mode", [None, *[mode for mode in CUDAGraphMode if mode != CUDAGraphMode.PIECEWISE]])
+def test_retrieval_rejects_modes_that_bypass_target_callbacks(mode):
+    config = _sage_mate_config()
+    config.compilation_config.cudagraph_mode = mode
+    with pytest.raises(ValueError, match="retrieval requires.*PIECEWISE"):
+        validate_diffspec_runtime(config)
+
+
+
+
+
+
+
+
 
 
 def test_hybrid_target_rotary_cache_skips_gdn_layers():
@@ -145,3 +178,13 @@ def test_compact_prefill_state_is_ready_before_compiled_graph_replay():
     assert cache.has_pending_attention()
     assert cache._pending_request_indices == [0]
     assert cache._pending_local_positions == [2]
+
+
+@pytest.mark.parametrize("architecture", ["Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration"])
+@pytest.mark.parametrize("quantization", ["fp8", "ascend"])
+def test_quantized_targets_are_rejected(architecture, quantization):
+    config = _sage_mate_config()
+    config.model_config.architectures = [architecture]
+    config.model_config.quantization = quantization
+    with pytest.raises(ValueError, match="quantized models"):
+        validate_diffspec_runtime(config)

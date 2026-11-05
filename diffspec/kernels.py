@@ -5,11 +5,10 @@
 
 import torch
 from vllm.triton_utils import tl, triton
-
 from vllm_ascend.ops.triton.rope import rope_forward_triton_siso
 
 
-@triton.jit
+@triton.jit(do_not_specialize=["max_chunks"])
 def _paged_chunk_attention_scores_kernel(
     query_ptr,
     key_cache_ptr,
@@ -23,15 +22,15 @@ def _paged_chunk_attention_scores_kernel(
     head_dim: tl.constexpr,
     block_size: tl.constexpr,
     chunk_size: tl.constexpr,
-    max_chunks: tl.constexpr,
+    max_chunks,
     padded_head_dim: tl.constexpr,
     padded_chunk_size: tl.constexpr,
-    padded_query_heads_per_kv: tl.constexpr,
     scale: tl.constexpr,
 ):
     batch_index = tl.program_id(0).to(tl.int64)
     chunk_index = tl.program_id(1).to(tl.int64)
-    kv_head = tl.program_id(2).to(tl.int64)
+    query_head = tl.program_id(2).to(tl.int64)
+    kv_head = query_head // (num_query_heads // num_kv_heads)
 
     seq_len = tl.load(seq_lens_ptr + batch_index).to(tl.int64)
     token_offsets = tl.arange(0, padded_chunk_size).to(tl.int64)
@@ -47,20 +46,14 @@ def _paged_chunk_attention_scores_kernel(
         other=0,
     ).to(tl.int64)
 
-    query_heads_per_kv = num_query_heads // num_kv_heads
-    query_head_offsets = tl.arange(0, padded_query_heads_per_kv).to(
-        tl.int64
-    )
-    valid_query_heads = query_head_offsets < query_heads_per_kv
-    query_heads = kv_head * query_heads_per_kv + query_head_offsets
     head_offsets = tl.arange(0, padded_head_dim).to(tl.int64)
     valid_head = head_offsets < head_dim
     query = tl.load(
         query_ptr
-        + (batch_index * num_query_heads + query_heads[:, None])
+        + (batch_index * num_query_heads + query_head)
         * head_dim
-        + head_offsets[None, :],
-        mask=valid_query_heads[:, None] & valid_head[None, :],
+        + head_offsets,
+        mask=valid_head,
         other=0.0,
     ).to(tl.float32)
 
@@ -76,29 +69,26 @@ def _paged_chunk_attention_scores_kernel(
     key_mask = valid_tokens[:, None] & valid_head[None, :]
     keys = tl.load(key_cache_ptr + key_offsets, mask=key_mask, other=0.0)
     logits = tl.sum(
-        query[:, None, :] * keys.to(tl.float32)[None, :, :],
-        axis=2,
+        query[None, :] * keys.to(tl.float32),
+        axis=1,
     ) * scale
     softmax_lse = tl.load(
         softmax_lse_ptr
         + batch_index * num_query_heads
-        + query_heads,
-        mask=valid_query_heads,
-        other=0.0,
+        + query_head,
     ).to(tl.float32)
-    weights = tl.exp(logits - softmax_lse[:, None])
-    weights = tl.where(valid_tokens[None, :], weights, 0.0)
+    weights = tl.exp(logits - softmax_lse)
+    weights = tl.where(valid_tokens, weights, 0.0)
     valid_count = tl.sum(valid_tokens.to(tl.float32), axis=0)
-    score = tl.sum(weights, axis=1) / tl.maximum(valid_count, 1.0)
+    score = tl.sum(weights, axis=0) / tl.maximum(valid_count, 1.0)
 
     output_offsets = (
         (batch_index * max_chunks + chunk_index) * num_query_heads
-        + query_heads
+        + query_head
     )
     tl.store(
         output_ptr + output_offsets,
         score,
-        mask=valid_query_heads,
     )
 
 
@@ -136,7 +126,9 @@ def paged_chunk_attention_scores(
         device=query.device,
     )
 
-    grid = (batch_size, max_chunks, num_kv_heads)
+    # One query head per program keeps the 256-dimensional Q/K reduction
+    # inside the 910B2 UB capacity; batching all GQA heads overflows it.
+    grid = (batch_size, max_chunks, num_query_heads)
     _paged_chunk_attention_scores_kernel[grid](
         query,
         key_cache,
@@ -153,9 +145,6 @@ def paged_chunk_attention_scores(
         max_chunks=max_chunks,
         padded_head_dim=triton.next_power_of_2(head_dim),
         padded_chunk_size=triton.next_power_of_2(chunk_size),
-        padded_query_heads_per_kv=triton.next_power_of_2(
-            num_query_heads // num_kv_heads
-        ),
         scale=scale,
     )
     return per_head_scores.mean(dim=-1)

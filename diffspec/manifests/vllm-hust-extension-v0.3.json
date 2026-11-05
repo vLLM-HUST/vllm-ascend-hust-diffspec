@@ -74,13 +74,13 @@
         "accelerator": "ascend",
         "core_commit": "762f85b311fbab0bcf8921dd216f5093cd58b9b8",
         "execution_mode": "graph",
-        "model": "Qwen3.8-27B",
+        "model": "Qwen3.5-27B",
         "plugin_commit": "4e57439e58ed3d78e675f9fd7b4614fb183c5394",
         "tensor_parallel_size": 4,
-        "status": "compatible_performance_degraded",
+        "status": "pending_retrieval_requalification",
         "draft_model": "VirVen/Qwen3.5-27B-EAGLE3-v2",
-        "artifact_image_id": "sha256:6dec9e68eaa61d5a3297abc5006d939d5644aa203c16ef1f9af65fb54d60722b",
-        "reason": "TP4 graph functional matrix passed; measured acceptance and latency do not justify a performance recommendation",
+        "historical_artifact_image_id": "sha256:6dec9e68eaa61d5a3297abc5006d939d5644aa203c16ef1f9af65fb54d60722b",
+        "reason": "Qwen3.5 target/Qwen3.5 draft requires PIECEWISE and fresh TP4 qualification; historical target identity and full-graph evidence do not qualify this pair",
         "evidence": "docs/evidence/sage-mate-20260904-tp4-graph.md"
       }
     }

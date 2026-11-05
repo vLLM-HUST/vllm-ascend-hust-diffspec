@@ -13,7 +13,7 @@
       "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
       "VLLM_ENGINE_ENABLE_PREFIX_CACHING": "0",
       "VLLM_ENGINE_MAX_NUM_SEQS": "4",
-      "VLLM_ENGINE_COMPILATION_CONFIG": "{\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[4,8,12,16]}"
+      "VLLM_ENGINE_COMPILATION_CONFIG": "{\"cudagraph_mode\":\"PIECEWISE\",\"cudagraph_capture_sizes\":[4,8,12,16]}"
     },
     "extra_env_keys": ["VLLM_ALLOW_LONG_MAX_MODEL_LEN"],
     "extra_args": [
@@ -27,20 +27,21 @@
     "incompatible_with": ["latchmoe"],
     "model_qualifications": [
       {
-        "model": "Qwen3.8-27B",
+        "model": "Qwen3.5-27B",
         "tensor_parallel_size": 4,
         "execution_mode": "graph",
-        "status": "compatible",
-        "functional_compatibility": "passed",
+        "status": "pending",
+        "functional_compatibility": "pending",
         "effectiveness_qualification": {
-          "status": "not-beneficial-in-tested-cell",
-          "scope": "qualified Eagle3 configuration / acceptance=19.29% / target-only matched comparison",
-          "reason": "Functional TP4 graph gates passed, but measured throughput was lower than target-only in this exact cell"
+          "status": "pending",
+          "scope": "Qwen3.5-27B BF16 with Qwen3.5 Eagle3; corrected PIECEWISE retrieval requires fresh TP4 qualification",
+          "reason": "The historical target identity was not verified to an immutable revision; its measurements and local TP2 diagnostics do not qualify this TP4 model pair"
         },
         "runtime_state_source": "live_instance_observation_only",
         "draft_model": "VirVen/Qwen3.5-27B-EAGLE3-v2",
-        "reason": "TP4 graph functional matrix passed; measured acceptance and latency do not justify a performance recommendation",
-        "evidence": "docs/evidence/sage-mate-20260904-tp4-graph.md"
+        "reason": "Use verified Qwen3.5 target/draft checkpoints; historical target identity and full-graph evidence do not qualify corrected retrieval for this pair",
+        "evidence": "docs/evidence/sage-mate-20260904-tp4-graph.md",
+        "historical_execution_mode": "FULL_DECODE_ONLY"
       }
     ]
   }
