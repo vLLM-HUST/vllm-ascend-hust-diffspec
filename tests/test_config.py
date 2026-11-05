@@ -63,10 +63,22 @@ def test_auto_verification_does_not_enable_tree() -> None:
 def test_adaptive_linear_depth_must_fit_configured_depth() -> None:
     config = DiffSpecPluginConfig(
         draft_context_policy="diffspec",
+        diffspec_adaptive_profile=True,
         diffspec_long_context_depth=6,
     )
     with pytest.raises(ValueError, match="long_context_depth"):
         config.validate(method="eagle3", depth=5, max_model_len=73728)
+
+
+def test_default_linear_depth_needs_no_adaptive_floor() -> None:
+    config, remaining = DiffSpecPluginConfig.extract(
+        {"draft_context_policy": "diffspec", "num_speculative_tokens": 1}
+    )
+    assert config.diffspec_adaptive_profile is False
+    config.validate(
+        method="eagle3", depth=remaining["num_speculative_tokens"],
+        max_model_len=73728,
+    )
 
 
 def test_full_policy_remains_a_noop() -> None:

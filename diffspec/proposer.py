@@ -3,8 +3,9 @@
 
 import torch
 from vllm.config import VllmConfig
-from vllm.forward_context import get_forward_context
+from vllm.forward_context import get_forward_context, is_forward_context_available
 from vllm.logger import init_logger
+from vllm_ascend.spec_decode.eagle_proposer import AscendEagleProposer
 
 from diffspec.runtime import (
     DiffSpecDraftCache,
@@ -13,9 +14,8 @@ from diffspec.runtime import (
     select_tree_level,
     validate_diffspec_runtime,
 )
-from vllm_ascend.spec_decode.eagle_proposer import AscendEagleProposer
 
-logger = init_logger(__name__)
+logger = init_logger(f"vllm.{__name__}")
 
 
 class AscendDiffSpecEagleProposer(AscendEagleProposer):
@@ -31,7 +31,7 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
         self.diffspec_settings = DiffSpecSettings.from_vllm_config(vllm_config)
         self.diffspec_cache: DiffSpecDraftCache | None = None
         self._diffspec_tree_enabled = False
-        self._linear_request_id: str | None = None
+        self._linear_request_id: tuple[str, ...] | None = None
         self._linear_runtime_depth: int | None = None
         self._linear_depth_floor = 1
         self._linear_good_cycles = 0
@@ -62,6 +62,7 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
             device=self.device,
             rotary_embedding=draft_attention.rotary_emb,
             target_cos_sin_cache=target_cos_sin_cache,
+            target_tensor_parallel_size=self.vllm_config.parallel_config.tensor_parallel_size,
         )
         self.model.set_diffspec_kv_sink(self.diffspec_cache.capture_raw_kv)
         cache_bytes = (
@@ -84,11 +85,13 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
             draft_attention.rotary_emb.cos_sin_cache.shape[0],
         )
         logger.info(
-            "DiffSpec verification mode: configured=%s, resolved=%s",
+            "DiffSpec verification mode: configured=%s, resolved=%s; "
+            "retrieval enabled on committed decode queries, interval=%d",
             self.speculative_config.diffspec_verification_mode,
             "tree"
             if self.speculative_config.diffspec_verification_mode == "tree"
             else "linear",
+            self.diffspec_settings.retrieval_interval,
         )
 
     def _run_merged_draft(self, *args, **kwargs) -> torch.Tensor:
@@ -99,7 +102,7 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
         with activate_runtime(self.diffspec_cache):
             self.diffspec_cache.begin_cycle(self.runner.input_batch.req_ids)
             try:
-                self._compact_long_prefill(args, kwargs)
+                self._compact_draft_root(args, kwargs)
                 if self._diffspec_tree_enabled:
                     self._compact_tree_decode_root(kwargs)
                     return self._run_tree_draft(**kwargs)
@@ -144,11 +147,11 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
                 self.speculative_config.diffspec_long_context_depth,
             )
         request_ids = self.runner.input_batch.req_ids
-        request_id = request_ids[0] if len(request_ids) == 1 else None
+        request_id = tuple(request_ids)
         if request_id != self._linear_request_id:
             self._linear_request_id = request_id
             self._linear_runtime_depth = base_depth
-            self._linear_depth_floor = base_depth
+            self._linear_depth_floor = 1
             self._linear_good_cycles = 0
             self._linear_bad_cycles = 0
         if self._linear_runtime_depth is None:
@@ -162,11 +165,22 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
             depth is None
             or self._diffspec_tree_enabled
             or not self.speculative_config.diffspec_adaptive_profile
-            or valid_counts.numel() != 1
+            or valid_counts.numel() == 0
+            or getattr(getattr(self, "diffspec_cache", None), "target_is_prefill", False)
         ):
             return
-        emitted_tokens = int(valid_counts.reshape(-1)[0].item())
-        accepted_fraction = max(0, emitted_tokens - 1) / depth
+        request_ids = tuple(self.runner.input_batch.req_ids)
+        if request_ids != self._linear_request_id:
+            return
+        # Read the active batch once. Padding and requests without committed
+        # output carry no evidence about draft acceptance.
+        counts = valid_counts.reshape(-1)[:len(request_ids)].to("cpu").tolist()
+        committed = [int(count) for count in counts if count > 0]
+        if not committed:
+            return
+        accepted_fraction = sum(min(count - 1, depth) for count in committed) / (
+            len(committed) * depth
+        )
         if accepted_fraction >= 0.8:
             self._linear_good_cycles += 1
             self._linear_bad_cycles = 0
@@ -201,7 +215,7 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
             self._observe_linear_depth(valid_counts)
             self.diffspec_cache.accept_target_queries(
                 valid_counts,
-                is_prefill=self.diffspec_cache.proposed_token_ids is None,
+                is_prefill=self.diffspec_cache.target_is_prefill,
             )
         return result
 
@@ -213,18 +227,32 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
         accepted = self.diffspec_cache.accepted_target_token_indices()
         return common_metadata, accepted, accepted, rejected
 
-    def _compact_long_prefill(self, args, kwargs) -> None:
-        """Replace a long first draft pass with cache-only QKV plus one token."""
+    def _compact_draft_root(self, args, kwargs) -> None:
+        """Project raw KV, then draft only from each committed target root.
+
+        Padded linear input includes rejected target tokens. Its maximum seq
+        length is not the committed root's history boundary. Keep those rows
+        out of compact attention, including on non-prefill draft passes.
+        """
         if args:
             raise TypeError("DiffSpec draft execution requires keyword arguments")
-        if not kwargs.get("is_prefill"):
+        if not kwargs.get("is_prefill") and self._diffspec_tree_enabled:
+            return
+        if self.diffspec_cache is None or not self.diffspec_cache._active_slots:
             return
         num_input_tokens = kwargs["num_input_tokens"]
-        if num_input_tokens == kwargs["batch_size"]:
-            return
-        assert self.diffspec_cache is not None
-
         batch_size = kwargs["batch_size"]
+        first_step_metadata = next(
+            iter(kwargs["multi_steps_attn_metadata"][0].values())
+        )
+        if num_input_tokens == batch_size:
+            kwargs["token_indices_to_sample"] = self.arange[:batch_size]
+            self.diffspec_cache.prepare_compact_prefill(
+                first_step_metadata,
+                batch_size,
+                committed_seq_lens=self._get_positions(batch_size).reshape(-1).to("cpu").add(1).tolist(),
+            )
+            return
         sample_indices = kwargs["token_indices_to_sample"][:batch_size].long()
         input_ids = self.input_ids[:num_input_tokens]
         positions = self._get_positions(num_input_tokens)
@@ -234,9 +262,6 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
             input_ids,
             hidden_states,
             inputs_embeds,
-        )
-        first_step_metadata = next(
-            iter(kwargs["multi_steps_attn_metadata"][0].values())
         )
         self.diffspec_cache.populate_prefill(
             positions,
@@ -256,11 +281,29 @@ class AscendDiffSpecEagleProposer(AscendEagleProposer):
             self.inputs_embeds[:batch_size].copy_(compact_embeds)
             kwargs["inputs_embeds"] = self.inputs_embeds[:batch_size]
 
-        kwargs["num_input_tokens"] = batch_size
+        num_input_tokens = batch_size
+        if is_forward_context_available():
+            from vllm.config import CUDAGraphMode
+
+            context = get_forward_context()
+            if context.cudagraph_runtime_mode == CUDAGraphMode.PIECEWISE:
+                # Keep the captured graph's padded shape while only the first
+                # batch_size rows participate in canonical KV and attention.
+                num_input_tokens = context.batch_descriptor.num_tokens
+        if num_input_tokens > batch_size:
+            self.input_ids[batch_size:num_input_tokens].zero_()
+            self._get_positions(num_input_tokens)[batch_size:].zero_()
+            self.hidden_states[batch_size:num_input_tokens].zero_()
+            if inputs_embeds is not None:
+                self.inputs_embeds[batch_size:num_input_tokens].zero_()
+                kwargs["inputs_embeds"] = self.inputs_embeds[:num_input_tokens]
+        kwargs["num_input_tokens"] = num_input_tokens
         kwargs["num_tokens"] = batch_size
         kwargs["token_indices_to_sample"] = self.arange[:batch_size]
         self.diffspec_cache.prepare_compact_prefill(
-            first_step_metadata, batch_size
+            first_step_metadata,
+            batch_size,
+            committed_seq_lens=compact_positions.reshape(-1).to("cpu").add(1).tolist(),
         )
 
     def _compact_tree_decode_root(self, kwargs) -> None:

@@ -32,7 +32,7 @@ def _tree_enabled(speculative_config: Any) -> bool:
 def _patch_config() -> None:
     import vllm.config.speculative as speculative_module
     import vllm.config.vllm as vllm_config_module
-    import vllm.engine.arg_utils as arg_utils
+    from vllm.engine import arg_utils
 
     speculative_cls = speculative_module.SpeculativeConfig
     defaults = DiffSpecPluginConfig()
@@ -41,19 +41,9 @@ def _patch_config() -> None:
             setattr(speculative_cls, name, getattr(defaults, name))
 
     if not hasattr(speculative_cls, "use_diffspec"):
-        setattr(speculative_cls, "use_diffspec", _enabled)
+        speculative_cls.use_diffspec = _enabled
     if not hasattr(speculative_cls, "max_speculative_tokens"):
-        setattr(
-            speculative_cls,
-            "max_speculative_tokens",
-            property(
-                lambda self: (
-                    self.diffspec_max_tree_nodes
-                    if _tree_enabled(self)
-                    else self.num_speculative_tokens
-                )
-            ),
-        )
+        speculative_cls.max_speculative_tokens = property(lambda self: self.diffspec_max_tree_nodes if _tree_enabled(self) else self.num_speculative_tokens)
 
     original_create = arg_utils.EngineArgs.create_speculative_config
 
@@ -136,20 +126,52 @@ def _patch_eagle3_model() -> None:
     import types
 
     import vllm.model_executor.models.llama_eagle3 as eagle3
+    from vllm.config import CompilationConfig
+    from vllm.utils.torch_utils import direct_register_custom_op
+
+    def capture_raw_kv(
+        positions: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        layer_index: int,
+    ) -> torch.Tensor:
+        from diffspec.ascend_patch import _active_runtime
+
+        runtime = _active_runtime()
+        if runtime is None:
+            return positions.clone()
+        compact = runtime.capture_raw_kv(layer_index, positions, key, value)
+        return runtime.graph_safe_rope_positions(positions, compact)
+
+    def capture_raw_kv_fake(positions, key, value, layer_index):
+        return torch.empty_like(positions)
+
+    # Like native unified_kv_cache_update, the runtime owns the mutated cache.
+    # Returned positions establish the ordering dependency through RoPE into
+    # attention. An opaque split op executes the state transition on every
+    # replay instead of freezing Python callback effects during compilation.
+    direct_register_custom_op(
+        op_name="diffspec_capture_raw_kv",
+        op_func=capture_raw_kv,
+        fake_impl=capture_raw_kv_fake,
+        mutates_args=[],
+        dispatch_key="CompositeExplicitAutograd",
+    )
+    split_op = "vllm::diffspec_capture_raw_kv"
+    if split_op not in CompilationConfig._attention_ops:
+        CompilationConfig._attention_ops.append(split_op)
 
     def attention_forward(self, positions, hidden_states):
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         sink = getattr(self, "_diffspec_kv_sink", None)
         if sink is not None:
-            compact_positions = sink(
-                getattr(self, "_diffspec_draft_layer_idx", 0),
+            positions = torch.ops.vllm.diffspec_capture_raw_kv(
                 positions,
                 k,
                 v,
+                getattr(self, "_diffspec_draft_layer_idx", 0),
             )
-            if compact_positions is not None:
-                positions = compact_positions
         q, k = self.rotary_emb(positions, q, k)
         attn_output = self.attn(q, k, v)
         output, _ = self.o_proj(attn_output)

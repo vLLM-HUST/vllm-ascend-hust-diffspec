@@ -2,16 +2,10 @@
   "canonical_repository": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec",
   "display_name": "DiffSpec",
   "evidence": {
-    "index": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#key-results",
-    "latest_result": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#key-results",
-    "performance_claims": [
-      {
-        "label": "matched-real-online-negative",
-        "scope": "Qwen3.8-27B with VirVen/Qwen3.5-27B-EAGLE3-v2, Ascend TP4 graph",
-        "result": "The run accepted 103/534 draft tokens (19.29%); warm TTFT was 0.459/0.469 s P50/P95 and output throughput 14.00/14.24 tok/s P50/P95, slower than target-only."
-      }
-    ],
-    "qualification": "not-beneficial-in-tested-cell"
+    "index": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#validation-and-reporting",
+    "latest_result": "https://github.com/vLLM-HUST/vllm-ascend-hust-diffspec#supported-evaluation-configuration",
+    "performance_claims": [],
+    "qualification": "pending"
   },
   "lifecycle": {
     "activation_contract": "See the extension manifest and README; discovery alone does not enable this MOD.",
@@ -39,11 +33,13 @@
   "schema_version": "vllm-hust-mod-metadata-v1",
   "scope": {
     "mechanism": "decoding_mechanism",
-    "out_of_scope": [],
+    "out_of_scope": [
+      "Native MTP2, TP2, prefix caching, asynchronous scheduling, quantized checkpoints, pipeline parallelism, MLA, and FULL_AND_PIECEWISE execution",
+      "Performance conclusions without benchmark-custodied evidence for the current immutable target/draft revisions"
+    ],
     "supported_workloads": [
-      "Qwen3.8-27B — verified functional, performance degraded",
-      "VirVen/Qwen3.5-27B-EAGLE3-v2 — required draft",
-      "Llama-3.1-8B — historical batch-1 lane only"
+      "Qwen/Qwen3.5-35B-A3B revision 59d61f3ce65a6d9863b86d2e96597125219dc754 — TP4/BF16/PIECEWISE qualification pending",
+      "jiapingW/Qwen3.5-35B-A3B-Eagle3-Specforge revision d07a277ececba408f017a0416002d7abb23caf36 — required draft"
     ]
   }
 }

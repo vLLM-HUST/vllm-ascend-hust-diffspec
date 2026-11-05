@@ -18,7 +18,8 @@ class DiffSpecPluginConfig:
     diffspec_retrieval_interval: int = 8
     diffspec_max_tree_nodes: int = 50
     diffspec_tree_threshold: float = 0.7
-    diffspec_adaptive_profile: bool = True
+    # Keep adaptive depth opt-in until qualified on the deployment workload.
+    diffspec_adaptive_profile: bool = False
     diffspec_long_context_threshold: int = 49152
     diffspec_long_context_depth: int = 2
 
