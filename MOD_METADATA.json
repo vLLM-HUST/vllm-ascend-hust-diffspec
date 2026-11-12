@@ -20,8 +20,13 @@
   "mod_id": "diffspec",
   "repository": "vllm-ascend-hust-diffspec",
   "responsibility": {
-    "advisor_status": "not_declared",
-    "advisors": [],
+    "advisor_status": "declared",
+    "advisors": [
+      {
+        "name": "Yu Huang / 黄禹",
+        "relationship": "internal"
+      }
+    ],
     "maintainers": [
       {
         "github": "dzcixy",
