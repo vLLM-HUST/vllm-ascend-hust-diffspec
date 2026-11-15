@@ -21,6 +21,6 @@ The associated historical performance pairs remain attributed to the 2026-10-30 
 
 ## Evidence custody
 
-Reports, commands, environment/source identities, both model attempts, four-rank traces, historical comparisons and an offline verifier are archived in the [fixed benchmark evidence directory](https://github.com/vLLM-HUST/vllm-hust-benchmark/tree/73e45240616d22fd11c5b47f11df6fbe2c76011e/reports/tech-outcomes-20261117/diffspec/) through [benchmark PR #680](https://github.com/vLLM-HUST/vllm-hust-benchmark/pull/680).
+Reports, commands, environment/source identities, both model attempts, four-rank traces, historical comparisons and an offline verifier are archived in the [fixed benchmark evidence directory](https://github.com/vLLM-HUST/vllm-hust-benchmark/tree/fe71138b4973872051d0b4963370c99be8385c5f/reports/tech-outcomes-20261117/diffspec/) through [benchmark PR #680](https://github.com/vLLM-HUST/vllm-hust-benchmark/pull/680).
 
 The [published Release](https://github.com/vLLM-HUST/vllm-hust-benchmark/releases/tag/diffspec-tech-outcomes-20261115-v1) preserves the raw functional and frozen-performance archives. Its download URLs, asset IDs and verified SHA256 digests are recorded in the benchmark report's release manifest. The original DiffSpec mechanism retains its external attribution; this work contributes implementation, Ascend compatibility and separate validation.
