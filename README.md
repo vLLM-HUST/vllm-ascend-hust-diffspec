@@ -139,6 +139,11 @@ A loaded proposer alone does not prove retrieval.
 
 ## Validation and reporting
 
+The [2026-11-15 pinned TP4 record](docs/validation-20261115.md) documents the
+committed-query, controlled dummy-row and cross-rank selection regression for
+PR #11. It scopes the results to the requested two-request boundary checks and
+links benchmark-owned evidence.
+
 ```bash
 python -m pytest tests/ -q
 DIFFSPEC_RUN_DEVICE_TESTS=1 python -m pytest \
